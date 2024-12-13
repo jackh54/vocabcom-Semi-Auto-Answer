@@ -45,7 +45,6 @@ python main.py
    - Sign in to your Vocabulary.com account
    - Navigate to your assignment
    - Press Enter to start automation
-   - Handle audio questions manually when prompted
 
 ## Known Issues
 - Gets a question wrong (rarely) - fix is to manually select the right one or wait ~30 seconds to eventually guess it.
