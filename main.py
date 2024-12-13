@@ -2,6 +2,7 @@ import undetected_chromedriver as uc
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.common.keys import Keys
 from time import sleep
 from openai import OpenAI
 import re
@@ -16,12 +17,12 @@ options.add_argument("--disable-gpu")
 options.add_argument("--window-size=1920,1080")
 options.add_argument("--no-sandbox")
 options.add_argument("--disable-dev-shm-usage")
-options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
-
 driver = uc.Chrome(options=options)
 wait = WebDriverWait(driver, 10)
 
 last_question_text = ""
+last_question_container = None
+last_input_field = None
 
 def get_openai_response(question, choices):
     prompt = f"Question: {question}\nChoices:\n"
@@ -51,14 +52,16 @@ def check_round_complete():
     return False
 
 def reset_and_reload():
-    global last_question_text
+    global last_question_text, last_question_container, last_input_field
     print("DEBUG: Resetting variables and reloading page...")
     last_question_text = ""
+    last_question_container = None
+    last_input_field = None
     driver.get("https://www.vocabulary.com/account/activities/")
     input("Round complete! Please select your assignment and press Enter to continue...")
 
 def get_question_and_choices():
-    global last_question_text
+    global last_question_text, last_question_container
     
     if check_round_complete():
         reset_and_reload()
@@ -73,14 +76,22 @@ def get_question_and_choices():
         return None, None, None
         
     current_container = question_containers[-1]
+    
+    if current_container == last_question_container:
+        print("DEBUG: Current container is the same as the last one, waiting for a new question...")
+        wait.until(EC.staleness_of(last_question_container))
+        question_containers = driver.find_elements(By.CSS_SELECTOR, ".question")
+        current_container = question_containers[-1]
+    
+    last_question_container = current_container
     print(f"DEBUG: Using container with class: {current_container.get_attribute('class')}")
     
     try:
         audio_button = current_container.find_elements(By.CSS_SELECTOR, "button.playword.ss-highvolume")
         if audio_button:
-            print("DEBUG: Audio question detected - user needs to solve this manually")
-            input("This is an audio question. Please solve it manually and press Enter when done...")
-            return "RESTART", None, None
+            print("DEBUG: Audio question detected - solving automatically")
+            solve_audio_question(current_container)
+            return None, None, None
 
         sentence_context = ""
         try:
@@ -129,6 +140,42 @@ def click_next_question():
     except Exception as e:
         print(f"DEBUG: Error clicking next: {str(e)}")
 
+def solve_audio_question(current_container):
+    global last_input_field
+    try:
+        # Locate the div containing the sentence
+        sentence_div = current_container.find_element(By.CSS_SELECTOR, "div.sentence.complete")
+        print(f"DEBUG: Located sentence div: {sentence_div.get_attribute('outerHTML')}")
+        
+        # Extract the word inside the first <strong> tag using JavaScript
+        word = driver.execute_script("return arguments[0].querySelector('strong').innerText;", sentence_div)
+        print(f"DEBUG: Extracted word using JavaScript: {word}")
+        
+        if not word:
+            print("DEBUG: Extracted word is empty")
+            return
+        
+        # Locate the input field and ensure it is interactable
+        input_field = current_container.find_element(By.CSS_SELECTOR, "input.wordspelling")
+        
+        if input_field == last_input_field:
+            print("DEBUG: Input field is the same as the last one, waiting for a new input field...")
+            wait.until(EC.staleness_of(last_input_field))
+            input_field = current_container.find_element(By.CSS_SELECTOR, "input.wordspelling")
+        
+        last_input_field = input_field
+        input_field.clear()  # Clear any existing text in the input field
+        input_field.send_keys(word + Keys.RETURN)
+        print("DEBUG: Typed the word and pressed Enter in the input field")
+        
+        # Continue with the next button
+        next_button = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, "button.next")))
+        next_button.click()
+        print("DEBUG: Clicked the 'Next' button")
+        
+    except Exception as e:
+        print(f"An error occurred: {e}")
+
 def main():
     while True: 
         try:
@@ -138,11 +185,6 @@ def main():
 
             while True:
                 question, choices, links = get_question_and_choices()
-
-                if question == "RESTART": 
-                    print("DEBUG: Restarting after audio question...")
-                    last_question_text = ""
-                    break  
 
                 if question is None or choices is None or links is None:
                     print("Failed to find new question or choices")
