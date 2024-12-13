@@ -139,7 +139,7 @@ def get_question_and_choices():
 
     last_question_container = current_container
     print(
-        f"DEBUG: Using container with class: "
+        "DEBUG: Using container with class: "
         f"{current_container.get_attribute('class')}"
     )
 
