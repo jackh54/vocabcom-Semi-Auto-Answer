@@ -24,11 +24,7 @@ pip install undetected-chromedriver selenium openai
 
 ## Configuration
 
-1. Replace the 
-
-openai_api_key
-
- in the script with your OpenAI API key
+1. Replace the openai_api_key in the script with your OpenAI API key
 2. Ensure Chrome browser is installed
 
 ## Usage
