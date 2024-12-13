@@ -30,7 +30,7 @@ pip install undetected-chromedriver selenium openai
 ## Usage
 *Works on windows & mac*
 
-*Working as of 12/12/24*
+*Working as of 12/13/24*
 
 1. Run the script:
 ```sh
@@ -43,7 +43,7 @@ python main.py
    - Press Enter to start automation
 
 ## Known Issues
-- Gets a question wrong (rarely) - fix is to manually select the right one or wait ~30 seconds to eventually guess it.
+- Gets a question wrong (rarely) - fix is to manually select the right one
 - Cant recognize questions with images (just do it yourself and press the next button)
 - Doesnt recognize achievement pages (just click next button and it will startup again)
 
@@ -58,8 +58,8 @@ python main.py
 
 - [ ] Add retry mechanism for failed questions
 - [ ] Implement image question detection
-- [ ] Add support for achievement page detection
-- [ ] Improve HTML stacking issue after round completion
+- [x] Add support for achievement page detection
+- [x] Improve HTML stacking issue after round completion
 - [ ] Add logging system for tracking success/error rates
 - [ ] Create config file for user settings
 - [ ] Create backup mechanism for session state
