@@ -32,9 +32,9 @@ openai_api_key
 2. Ensure Chrome browser is installed
 
 ## Usage
-***CURRENTLY HAS ONLY BEEN TESTED ON WINDOWS 11***
+*Works on windows & mac*
 
-*Working as of 12/10/24*
+*Working as of 12/12/24*
 
 1. Run the script:
 ```sh
@@ -55,7 +55,6 @@ python main.py
 ## Important Notes
 
 - The script requires manual login for security purposes
-- Audio questions must be solved **manually**
 - Includes automatic detection for completed rounds
 - Uses undetected-chromedriver to avoid detection
 - After each round it makes you reclick the assignment due to issues with the html stacking up
