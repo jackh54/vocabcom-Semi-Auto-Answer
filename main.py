@@ -215,8 +215,8 @@ def solve_audio_question(current_container):
             By.CSS_SELECTOR, "div.sentence.complete"
         )
         print(
-            f"DEBUG: Located sentence div: {
-                sentence_div.get_attribute('outerHTML')}"
+            "DEBUG: Located sentence div: "
+            f"{sentence_div.get_attribute('outerHTML')}"
         )
 
         word = driver.execute_script(
