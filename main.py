@@ -1,3 +1,4 @@
+import json
 import undetected_chromedriver as uc
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
@@ -7,16 +8,19 @@ from time import sleep
 from openai import OpenAI
 import re
 
+with open('config.json', 'r') as config_file:
+    config = json.load(config_file)
 
-openai_api_key = ""
+openai_api_key = config["openai_api_key"]
 client = OpenAI(api_key=openai_api_key)
 
-
 options = uc.ChromeOptions()
-options.add_argument("--disable-gpu")
-options.add_argument("--window-size=1920,1080")
-options.add_argument("--no-sandbox")
-options.add_argument("--disable-dev-shm-usage")
+for option, value in config["chrome_options"].items():
+    if isinstance(value, bool) and value:
+        options.add_argument(f"--{option.replace('_', '-')}")
+    elif isinstance(value, str):
+        options.add_argument(f"--{option.replace('_', '-')}={value}")
+
 driver = uc.Chrome(options=options)
 wait = WebDriverWait(driver, 10)
 
@@ -24,6 +28,15 @@ last_question_text = ""
 last_question_container = None
 last_input_field = None
 
+statistics = {
+    "correct_answers": 0,
+    "wrong_answers": 0,
+    "achievements": 0
+}
+
+def save_statistics():
+    with open('statistics.json', 'w') as stats_file:
+        json.dump(statistics, stats_file, indent=4)
 
 def get_openai_response(question, choices):
     prompt = f"Question: {question}\nChoices:\n"
@@ -39,7 +52,6 @@ def get_openai_response(question, choices):
     print(f"Raw GPT response: {answer}")
     return answer
 
-
 def check_round_complete():
     try:
         complete_element = driver.find_elements(
@@ -51,18 +63,13 @@ def check_round_complete():
         print(f"DEBUG: Error checking round completion: {str(e)}")
     return False
 
-
 def reset_and_reload():
     global last_question_text, last_question_container, last_input_field
     print("DEBUG: Resetting variables and reloading page...")
     last_question_text = ""
     last_question_container = None
     last_input_field = None
-    # driver.get("https://www.vocabulary.com/account/activities/")
-    print(
-        "Round complete! Continuing"
-    )
-
+    print("Round complete! Continuing")
 
 def check_and_click_next_if_achievement():
     try:
@@ -74,6 +81,8 @@ def check_and_click_next_if_achievement():
                 achievement_element)
             if not is_processed:
                 print("DEBUG: Achievement detected")
+                statistics["achievements"] += 1
+                save_statistics()
                 next_button = wait.until(
                     EC.element_to_be_clickable(
                         (By.CSS_SELECTOR,
@@ -90,7 +99,6 @@ def check_and_click_next_if_achievement():
         print(f"DEBUG: No achievement element found: {str(e)}")
     return False
 
-
 def check_if_finished():
     try:
         finished_element = driver.find_element(
@@ -102,7 +110,6 @@ def check_if_finished():
     except Exception as e:
         print(f"DEBUG: No finished element found: {str(e)}")
     return False
-
 
 def get_question_and_choices():
     global last_question_text, last_question_container
@@ -190,7 +197,6 @@ def get_question_and_choices():
         print(f"DEBUG: Error getting question/choices: {str(e)}")
         return None, None, None
 
-
 def click_next_question():
     sleep(1)
     try:
@@ -206,7 +212,6 @@ def click_next_question():
 
     except Exception as e:
         print(f"DEBUG: Error clicking next: {str(e)}")
-
 
 def solve_audio_question(current_container):
     global last_input_field
@@ -256,11 +261,9 @@ def solve_audio_question(current_container):
     except Exception as e:
         print(f"An error occurred: {e}")
 
-
 def main():
     while True:
         try:
-
             driver.get("https://www.vocabulary.com/account/activities/")
             input(
                 "Sign in and click your assignment and press enter."
@@ -289,16 +292,20 @@ def main():
                         links[correct_choice_index].click()
                         print(f"Clicked on choice #{correct_choice_index + 1}")
 
+                        statistics["correct_answers"] += 1
+                        save_statistics()
+
                         click_next_question()
                     else:
                         print("Could not determine the correct choice number.")
+                        statistics["wrong_answers"] += 1
+                        save_statistics()
 
                     sleep(2)
 
         except Exception as e:
             print(f"DEBUG: Error in main loop: {str(e)}")
             continue
-
 
 if __name__ == "__main__":
     main()
