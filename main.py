@@ -34,9 +34,11 @@ statistics = {
     "achievements": 0
 }
 
+
 def save_statistics():
     with open('statistics.json', 'w') as stats_file:
         json.dump(statistics, stats_file, indent=4)
+
 
 def get_openai_response(question, choices):
     prompt = f"Question: {question}\nChoices:\n"
@@ -52,6 +54,7 @@ def get_openai_response(question, choices):
     print(f"Raw GPT response: {answer}")
     return answer
 
+
 def check_round_complete():
     try:
         complete_element = driver.find_elements(
@@ -63,6 +66,7 @@ def check_round_complete():
         print(f"DEBUG: Error checking round completion: {str(e)}")
     return False
 
+
 def reset_and_reload():
     global last_question_text, last_question_container, last_input_field
     print("DEBUG: Resetting variables and reloading page...")
@@ -70,6 +74,7 @@ def reset_and_reload():
     last_question_container = None
     last_input_field = None
     print("Round complete! Continuing")
+
 
 def check_and_click_next_if_achievement():
     try:
@@ -99,6 +104,7 @@ def check_and_click_next_if_achievement():
         print(f"DEBUG: No achievement element found: {str(e)}")
     return False
 
+
 def check_if_finished():
     try:
         finished_element = driver.find_element(
@@ -110,6 +116,7 @@ def check_if_finished():
     except Exception as e:
         print(f"DEBUG: No finished element found: {str(e)}")
     return False
+
 
 def get_question_and_choices():
     global last_question_text, last_question_container
@@ -197,6 +204,7 @@ def get_question_and_choices():
         print(f"DEBUG: Error getting question/choices: {str(e)}")
         return None, None, None
 
+
 def click_next_question():
     sleep(1)
     try:
@@ -212,6 +220,7 @@ def click_next_question():
 
     except Exception as e:
         print(f"DEBUG: Error clicking next: {str(e)}")
+
 
 def solve_audio_question(current_container):
     global last_input_field
@@ -261,6 +270,7 @@ def solve_audio_question(current_container):
     except Exception as e:
         print(f"An error occurred: {e}")
 
+
 def main():
     while True:
         try:
@@ -306,6 +316,7 @@ def main():
         except Exception as e:
             print(f"DEBUG: Error in main loop: {str(e)}")
             continue
+
 
 if __name__ == "__main__":
     main()
