@@ -2,8 +2,8 @@
   "openai_api_key": "",
   "chrome_options": {
     "disable_gpu": true,
-    "window_size": "1920,1080",
     "no_sandbox": true,
-    "disable_dev_shm_usage": true
+    "disable_dev_shm_usage": true,
+    "window_size": "1920,1079"
   }
 }

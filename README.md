@@ -1,75 +1,108 @@
-# Vocabulary.com Semi-Auto Bot
+# Vocabulary.com Assistant
 
-An semi-automated solution for completing Vocabulary.com assignments using Selenium and OpenAI's GPT-3.5-turbo model.
+A modern GUI application that helps automate vocabulary.com practice sessions using AI assistance.
 
 ## Features
 
-- Automatically answers Vocabulary.com questions
-- Handles multiple choice questions
-- Detects audio questions and prompts for manual intervention
-- Supports round completion and automatic reloading
-- Uses GPT-3.5 for intelligent answer selection
+- Modern, user-friendly GUI interface with dark theme
+- Real-time status updates and logging
+- Statistics tracking (correct answers, wrong answers, achievements)
+- Configurable browser settings
+- Secure API key management
+- Support for both multiple choice and audio questions
+- Automatic achievement handling
+- Start/Stop functionality
 
-## Prerequisites
+## Requirements
 
-- Python 3.x
+- Python 3.8 or higher
 - Chrome browser
 - OpenAI API key
 
 ## Installation
 
-```sh
-pip install undetected-chromedriver selenium openai
+1. Clone this repository:
+```bash
+git clone https://github.com/yourusername/vocabcom-Semi-Auto-Answer.git
+cd vocabcom-Semi-Auto-Answer
 ```
 
-## Configuration
+2. Install the required dependencies:
+```bash
+pip install -r requirements.txt
+```
 
-1. Replace the openai_api_key in the script with your OpenAI API key
-2. Ensure Chrome browser is installed
+3. Configure your settings:
+   - Launch the application
+   - Enter your OpenAI API key
+   - Adjust browser settings if needed
+   - Click "Save Configuration"
 
 ## Usage
-*Works on windows & mac*
 
-*Working as of 12/13/24*
-
-1. Run the script:
-```sh
-python main.py
+1. Run the application:
+```bash
+python vocab_assistant.py
 ```
 
-2. Follow the prompts to:
-   - Sign in to your Vocabulary.com account
-   - Navigate to your assignment
-   - Press Enter to start automation
+2. In the application:
+   - Configure your settings if you haven't already
+   - Click "Start Automation"
+   - Sign in to vocabulary.com when the browser opens
+   - Select your assignment
+   - The automation will begin automatically
 
-## Known Issues
-- Gets a question wrong (rarely) - fix is to manually select the right one
-- Cant recognize questions with images (just do it yourself and press the next button)
-- Doesnt recognize achievement pages (just click next button and it will startup again)
+3. Features:
+   - Use the Start/Stop button to control the automation
+   - Monitor progress in the status window
+   - Track statistics in real-time
+   - View detailed logs in the log viewer
 
-## Important Notes
+## Configuration Options
 
-- The script requires manual login for security purposes
-- Includes automatic detection for completed rounds
-- Uses undetected-chromedriver to avoid detection
-- After each round it makes you reclick the assignment due to issues with the html stacking up
+- **API Configuration**
+  - OpenAI API Key: Your API key for GPT-3.5 access
 
-## TODO
+- **Browser Settings**
+  - Disable GPU: Toggle GPU acceleration
+  - No Sandbox: Toggle Chrome sandbox mode
+  - Disable Shared Memory: Toggle shared memory usage
+  - Window Size: Set browser window dimensions
 
-- [ ] Add retry mechanism for failed questions
-- [ ] Implement image question detection
-- [x] Add support for achievement page detection
-- [x] Improve HTML stacking issue after round completion
-- [ ] Add logging system for tracking success/error rates
-- [ ] Create config file for user settings
-- [ ] Create backup mechanism for session state
-- [ ] Optimize waiting times between questions
-- [ ] Add statistics tracking
-- [ ] Add support for different question types
-- [ ] Use a .env
-  
-Feel free to open pull requests :)
+## Statistics Tracking
+
+The application tracks:
+- Correct answers
+- Wrong answers
+- Achievements unlocked
+
+Statistics are automatically saved and persist between sessions.
+
+## Troubleshooting
+
+1. **Browser Issues**
+   - Make sure Chrome is installed
+   - Try toggling different browser settings
+   - Clear browser cache/cookies if needed
+
+2. **API Issues**
+   - Verify your API key is correct
+   - Check your OpenAI account status
+   - Ensure you have sufficient API credits
+
+3. **Automation Issues**
+   - Make sure you're signed in to vocabulary.com
+   - Check your internet connection
+   - Try restarting the application
+
+## Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
+
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
 
 ## Disclaimer
 
-Using this tool could violate vocab.com's terms if used incorrectly, please use accordingly, im not responsible for how you use it.
+This tool is for educational purposes only. Please use responsibly and in accordance with vocabulary.com's terms of service.
