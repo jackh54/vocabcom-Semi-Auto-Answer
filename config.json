@@ -4,6 +4,7 @@
     "disable_gpu": true,
     "no_sandbox": true,
     "disable_dev_shm_usage": true,
+    "suppress_errors": true,
     "window_size": "1920,1079"
   }
 }

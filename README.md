@@ -6,12 +6,17 @@ A modern GUI application that helps automate vocabulary.com practice sessions us
 
 - Modern, user-friendly GUI interface with dark theme
 - Real-time status updates and logging
-- Statistics tracking (correct answers, wrong answers, achievements)
+- Statistics tracking (correct answers, wrong answers, achievements, cache hits)
+- Smart answer caching system
 - Configurable browser settings
 - Secure API key management
-- Support for both multiple choice and audio questions
+- Support for both multiple choice, image, and audio questions
 - Automatic achievement handling
 - Start/Stop functionality
+- "Ready to Start" confirmation button
+- Intelligent retry system for wrong answers
+- Automatic round completion handling
+- Assignment completion detection
 
 ## Requirements
 
@@ -23,7 +28,7 @@ A modern GUI application that helps automate vocabulary.com practice sessions us
 
 1. Clone this repository:
 ```bash
-git clone https://github.com/yourusername/vocabcom-Semi-Auto-Answer.git
+git clone https://github.com/jackh54/vocabcom-Semi-Auto-Answer.git
 cd vocabcom-Semi-Auto-Answer
 ```
 
@@ -50,13 +55,18 @@ python vocab_assistant.py
    - Click "Start Automation"
    - Sign in to vocabulary.com when the browser opens
    - Select your assignment
-   - The automation will begin automatically
+   - Click "Ready to Start" when you're ready to begin
+   - The automation will begin processing questions
 
 3. Features:
    - Use the Start/Stop button to control the automation
    - Monitor progress in the status window
    - Track statistics in real-time
    - View detailed logs in the log viewer
+   - Automatic caching of correct answers
+   - Up to 4 retry attempts for wrong answers
+   - Automatic handling of image questions
+   - Smart detection of round completion
 
 ## Configuration Options
 
@@ -68,6 +78,7 @@ python vocab_assistant.py
   - No Sandbox: Toggle Chrome sandbox mode
   - Disable Shared Memory: Toggle shared memory usage
   - Window Size: Set browser window dimensions
+  - Suppress Chrome Errors: Toggle error logging
 
 ## Statistics Tracking
 
@@ -75,15 +86,49 @@ The application tracks:
 - Correct answers
 - Wrong answers
 - Achievements unlocked
+- Cache hits (successful use of cached answers)
 
-Statistics are automatically saved and persist between sessions.
+Statistics and question cache are automatically saved and persist between sessions.
+
+## Smart Caching System
+
+The application includes an intelligent answer caching system:
+- Automatically caches correct answers
+- Immediately usable for repeated questions
+- Case-insensitive matching
+- Tracks usage statistics for each cached answer
+- Automatically removes incorrect cached answers
+- Persists between sessions
+- Real-time updates during automation
+
+## Retry System
+
+For regular questions:
+- Up to 4 attempts per question
+- Remembers previous wrong answers
+- Uses AI to suggest different answers each attempt
+- Updates cache based on results
+
+For image questions:
+- Up to 4 attempts to find correct image
+- Systematic testing of each option
+- Automatic detection of correct answers
+
+## Assignment Completion
+
+- Automatic detection of completed assignments
+- Notification when assignment is complete
+- Instructions for starting new assignments
+- Saves final statistics and cache
+- Graceful cleanup of resources
 
 ## Troubleshooting
 
 1. **Browser Issues**
-   - Make sure Chrome is installed
+   - Make sure Chrome is installed and up to date
    - Try toggling different browser settings
    - Clear browser cache/cookies if needed
+   - Check Activity Monitor for stuck Chrome processes
 
 2. **API Issues**
    - Verify your API key is correct
@@ -94,6 +139,7 @@ Statistics are automatically saved and persist between sessions.
    - Make sure you're signed in to vocabulary.com
    - Check your internet connection
    - Try restarting the application
+   - Clear the question cache if answers seem incorrect
 
 ## Contributing
 
