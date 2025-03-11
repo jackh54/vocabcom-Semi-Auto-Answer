@@ -25,7 +25,7 @@ class QTextEditLogger(logging.Handler):
                 border: 1px solid #555555;
                 border-radius: 4px;
                 padding: 2px;
-                font-family: 'Consolas', 'Courier New', monospace;
+                font-family: 'Menlo', 'Monaco', monospace;
             }
         """)
 
@@ -379,24 +379,24 @@ class MainWindow(QMainWindow):
         try:
             with open('config.json', 'r') as f:
                 config = json.load(f)
-        except FileNotFoundError:
-            QMessageBox.warning(self, "Error", "Please save configuration first!")
-            return
-
-        self.automation_thread = AutomationThread(config)
-        self.automation_thread.status_update.connect(self.update_status)
-        self.automation_thread.stats_update.connect(self.update_stats)
-        self.automation_thread.error_occurred.connect(self.handle_error)
-        self.automation_thread.log_message.connect(self.log_message)
-        self.automation_thread.automation_completed.connect(self.handle_completion)
-        
-        self.automation_thread.start()
-        self.toggle_btn.setText("Stop Automation")
-        self.toggle_btn.setProperty("running", True)
-        self.toggle_btn.setStyleSheet(self.toggle_btn.styleSheet())
-        self.ready_btn.setEnabled(True)
-        self.progress_bar.show()
-        self.config_widget.setEnabled(False)
+            
+            self.automation_thread = AutomationThread(config)
+            self.automation_thread.status_update.connect(self.update_status)
+            self.automation_thread.stats_update.connect(self.update_stats)
+            self.automation_thread.error_occurred.connect(self.handle_error)
+            self.automation_thread.log_message.connect(self.log_message)
+            self.automation_thread.automation_completed.connect(self.handle_completion)
+            
+            self.automation_thread.start()
+            
+            self.toggle_btn.setText("Stop Automation")
+            self.toggle_btn.setProperty("running", True)
+            self.toggle_btn.setStyleSheet(self.toggle_btn.styleSheet())
+            self.ready_btn.setEnabled(True)
+            self.progress_bar.show()
+            self.config_widget.setEnabled(False)
+        except Exception as e:
+            QMessageBox.critical(self, "Error", str(e))
 
     def stop_automation(self):
         if self.automation_thread:
@@ -433,10 +433,17 @@ class MainWindow(QMainWindow):
         logging.info(message)
 
     def handle_completion(self):
-        """Handle automation completion"""
-        self.stop_automation()
-        self.update_status("Ready for new assignment")
-        self.log_message("Automation completed. Select a new assignment and press Start to begin.")
+        """Handle automation completion on the main thread"""
+        QMessageBox.information(self, "Assignment Complete", 
+            "The current assignment has been completed!\n\n"
+            "To start a new assignment:\n"
+            "1. Select your next assignment\n"
+            "2. Click 'Start Automation'\n"
+            "3. Click 'Ready to Start' when ready"
+        )
+        self.toggle_btn.setText("Start Automation")
+        self.toggle_btn.setProperty("running", False)
+        self.toggle_btn.setStyleSheet(self.toggle_btn.styleSheet())
 
     def closeEvent(self, event):
         # Stop automation if running
@@ -461,76 +468,58 @@ class AutomationThread(QThread):
     stats_update = pyqtSignal(dict)
     error_occurred = pyqtSignal(str)
     log_message = pyqtSignal(str)
-    automation_completed = pyqtSignal()  # New signal for completion
+    automation_completed = pyqtSignal()  # Signal for completion
 
     def __init__(self, config):
         super().__init__()
         self.config = config
-        self.running = True
         self.automation = None
-        self.browser_setup_attempts = 0
-        self.max_browser_setup_attempts = 3
+        self.running = True
 
     def run(self):
         try:
-            # Initialize VocabAutomation without browser setup first
             self.automation = VocabAutomation(
                 self.config,
-                status_callback=self.status_update.emit,
-                stats_callback=self.stats_update.emit,
-                log_callback=self.log_message.emit,
-                skip_browser_setup=True
+                status_callback=self.handle_status,
+                stats_callback=self.handle_stats,
+                log_callback=self.handle_log
             )
             
             # Set completion callback
             self.automation.set_completion_callback(self.handle_completion)
             
-            # Now set up the browser with retries
-            while self.browser_setup_attempts < self.max_browser_setup_attempts:
-                try:
-                    self.automation.setup_browser()
-                    break
-                except Exception as e:
-                    self.browser_setup_attempts += 1
-                    if self.browser_setup_attempts >= self.max_browser_setup_attempts:
-                        self.error_occurred.emit(f"Failed to start browser after {self.max_browser_setup_attempts} attempts: {str(e)}")
-                        return
-                    self.status_update.emit(f"Browser setup attempt {self.browser_setup_attempts} failed, retrying...")
-                    sleep(2)  # Wait before retrying
-                
-            # Continue with automation
             self.automation.run()
+            
         except Exception as e:
             self.error_occurred.emit(str(e))
+            logging.error(f"Error in automation thread: {str(e)}")
         finally:
             self.cleanup()
 
     def handle_completion(self):
-        """Handle automation completion"""
+        """Handle automation completion by emitting signal to main thread"""
         self.automation_completed.emit()
-        self.cleanup()
+
+    def handle_status(self, status):
+        self.status_update.emit(status)
+
+    def handle_stats(self, stats):
+        self.stats_update.emit(stats)
+
+    def handle_log(self, message):
+        self.log_message.emit(message)
 
     def stop(self):
+        if self.automation:
+            self.automation.stop()
         self.running = False
-        if self.automation:
-            try:
-                self.automation.stop()
-            except Exception as e:
-                self.error_occurred.emit(f"Error stopping automation: {str(e)}")
-            
+
     def cleanup(self):
-        if self.automation:
-            try:
-                self.automation.stop()
-                if hasattr(self.automation, 'driver'):
-                    try:
-                        self.automation.driver.quit()
-                    except Exception:
-                        pass  # Ignore errors during driver quit
-            except Exception as e:
-                self.error_occurred.emit(f"Error during cleanup: {str(e)}")
-            finally:
-                self.automation = None
+        try:
+            if self.automation:
+                self.automation.cleanup()
+        except Exception as e:
+            logging.error(f"Error in cleanup: {str(e)}")
 
 def main():
     app = QApplication(sys.argv)
