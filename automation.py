@@ -20,16 +20,107 @@ import logging
 import platform
 import signal
 import gc
+from rich.console import Console
+from rich.panel import Panel
+from rich.layout import Layout
+from rich.live import Live
+from rich.table import Table
+from rich import box
+from datetime import datetime
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(sys.stdout),  # Log to console
-        logging.FileHandler('automation.log')  # Log to file
-    ]
-)
+# Initialize rich console
+console = Console()
+
+class TerminalUI:
+    def __init__(self):
+        self.console = Console()
+        self.layout = Layout()
+        self.last_status = ""
+        self.last_question = ""
+        self.statistics = {}
+        self.start_time = datetime.now()
+        
+    def create_stats_table(self, stats):
+        """Create a beautiful statistics table"""
+        table = Table(box=box.ROUNDED, expand=True)
+        table.add_column("Statistic", style="cyan")
+        table.add_column("Value", justify="right", style="green")
+        
+        for key, value in stats.items():
+            # Convert snake_case to Title Case
+            display_key = " ".join(word.capitalize() for word in key.split("_"))
+            table.add_row(display_key, str(value))
+            
+        # Add runtime
+        runtime = datetime.now() - self.start_time
+        hours = runtime.seconds // 3600
+        minutes = (runtime.seconds % 3600) // 60
+        seconds = runtime.seconds % 60
+        table.add_row("Runtime", f"{hours:02d}:{minutes:02d}:{seconds:02d}")
+        
+        return table
+
+    def create_status_panel(self):
+        """Create a panel for status messages"""
+        return Panel(
+            self.last_status,
+            title="Status",
+            border_style="blue",
+            box=box.ROUNDED
+        )
+
+    def create_question_panel(self):
+        """Create a panel for the current question"""
+        return Panel(
+            self.last_question or "Waiting for question...",
+            title="Current Question",
+            border_style="yellow",
+            box=box.ROUNDED
+        )
+
+    def update_display(self, status=None, question=None, stats=None):
+        """Update the terminal display"""
+        if status:
+            self.last_status = status
+        if question:
+            self.last_question = question
+        if stats:
+            self.statistics = stats
+
+        # Create layout
+        self.layout.split(
+            Layout(name="upper"),
+            Layout(name="lower")
+        )
+        
+        self.layout["upper"].split_row(
+            Layout(self.create_stats_table(self.statistics), name="stats", ratio=1),
+            Layout(self.create_status_panel(), name="status", ratio=2)
+        )
+        
+        self.layout["lower"].update(self.create_question_panel())
+        
+        # Clear screen and render
+        console.clear()
+        console.print(self.layout)
+
+# Configure logging based on config
+def setup_logging(config):
+    log_level = config.get('log_level', 'INFO').upper()
+    enable_logging = config.get('enable_logging', False)
+    
+    if enable_logging:
+        logging.basicConfig(
+            level=getattr(logging, log_level),
+            format='%(asctime)s - %(levelname)s - %(message)s',
+            handlers=[
+                logging.StreamHandler(sys.stdout),
+                logging.FileHandler('automation.log')
+            ]
+        )
+    else:
+        # Disable all logging if not enabled
+        logging.getLogger().setLevel(logging.CRITICAL)
 
 # Global variables
 _global_cleanup_initiated = False
@@ -167,8 +258,37 @@ atexit.register(cleanup_chrome_processes)
 
 class VocabAutomation:
     def __init__(self, config, status_callback=None, stats_callback=None, log_callback=None, skip_browser_setup=False):
+        # Initialize terminal UI
+        self.ui = TerminalUI()
+        
+        # Initialize threading controls
+        self._thread_lock = threading.RLock()
+        self._driver_lock = threading.RLock()
+        self._cleanup_lock = threading.Lock()
+        self._cleanup_called = False
+        self._completion_called = False
+        
+        # Initialize state
         self.config = config
         self.running = True
+        self.ready_to_start = False
+        self.driver = None
+        self.wait = None
+        self.client = None
+        self.last_question_text = ""
+        self.last_question_container = None
+        self.last_input_field = None
+        
+        # Callbacks
+        self.status_callback = status_callback
+        self.stats_callback = stats_callback
+        self.log_callback = log_callback
+        self.completion_callback = None
+        
+        # Setup logging
+        setup_logging(config)
+        
+        # Cache and statistics
         self.statistics = {
             "correct_answers": 0,
             "wrong_answers": 0,
@@ -177,25 +297,9 @@ class VocabAutomation:
             "cache_misses": 0,
             "cache_invalidations": 0
         }
-        self.status_callback = status_callback
-        self.stats_callback = stats_callback
-        self.log_callback = log_callback
-        self.last_question_text = ""
-        self.last_question_container = None
-        self.last_input_field = None
-        self.ready_to_start = False
         self.question_cache = {}
-        self.driver = None
-        self.wait = None
-        self.chrome_log_file = None
-        self.completion_callback = None
         self.cache_expiry_days = 30
         self.max_cache_size = 1000
-        self.browser_setup_retries = 3
-        self.browser_setup_delay = 2
-        self._cleanup_lock = threading.Lock()
-        self._cleanup_called = False
-        self._completion_called = False
         
         try:
             self.setup_openai()
@@ -220,14 +324,41 @@ class VocabAutomation:
             log_func(message)
 
     def update_status(self, message, level='info'):
-        """Update status with optional log level"""
-        if self.status_callback:
-            self.status_callback(message)
-        else:
-            self.log(message, level)
+        """Update status in terminal UI and log if enabled"""
+        if self.config.get('enable_logging', False):
+            log_func = getattr(logging, level)
+            log_func(message)
+        
+        self.ui.update_display(status=message, stats=self.statistics)
+
+    def update_question(self, question):
+        """Update current question display"""
+        self.ui.update_display(question=question, stats=self.statistics)
 
     def setup_openai(self):
-        self.client = OpenAI(api_key=self.config["openai_api_key"])
+        """Set up OpenAI client with retry mechanism"""
+        try:
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    self.client = OpenAI(api_key=self.config["openai_api_key"])
+                    # Test the client
+                    self.client.chat.completions.create(
+                        model="gpt-3.5-turbo",
+                        messages=[{"role": "user", "content": "test"}],
+                        max_tokens=5
+                    )
+                    self.update_status("OpenAI API connection successful")
+                    return
+                except Exception as e:
+                    if attempt < max_retries - 1:
+                        self.update_status(f"Error setting up OpenAI (attempt {attempt + 1}): {str(e)}")
+                        sleep(2)
+                        continue
+                    raise
+        except Exception as e:
+            self.update_status(f"Failed to set up OpenAI API: {str(e)}")
+            raise
 
     def load_statistics(self):
         try:
@@ -239,10 +370,12 @@ class VocabAutomation:
             self.save_statistics()
 
     def save_statistics(self):
-        with open('statistics.json', 'w') as f:
-            json.dump(self.statistics, f, indent=4)
-        if self.stats_callback:
-            self.stats_callback(self.statistics)
+        """Thread-safe statistics saving"""
+        with self._thread_lock:
+            with open('statistics.json', 'w') as f:
+                json.dump(self.statistics, f, indent=4)
+            if self.stats_callback:
+                self.stats_callback(self.statistics)
 
     def load_question_cache(self):
         try:
@@ -254,8 +387,10 @@ class VocabAutomation:
             self.save_question_cache()
 
     def save_question_cache(self):
-        with open('question_cache.json', 'w') as f:
-            json.dump(self.question_cache, f, indent=4)
+        """Thread-safe cache saving"""
+        with self._thread_lock:
+            with open('question_cache.json', 'w') as f:
+                json.dump(self.question_cache, f, indent=4)
 
     def get_cache_key(self, question, choices):
         """Create a unique key for the question and its choices"""
@@ -346,7 +481,7 @@ class VocabAutomation:
         self.save_statistics()
 
     def get_cached_answer(self, question, choices):
-        """Try to get an answer from the cache"""
+        """Thread-safe cache access"""
         try:
             if not question or not choices:
                 return None
@@ -356,27 +491,31 @@ class VocabAutomation:
                 return None
             
             self.log(f"Looking up cache key: {cache_key}", 'debug')
-            cached_data = self.question_cache.get(cache_key)
             
-            if cached_data and self.validate_cache_entry(cached_data, choices):
-                self.update_status(f"Found cached answer: Choice #{cached_data['correct_index'] + 1}")
-                self.statistics["cache_hits"] += 1
-                self.save_statistics()
+            with self._thread_lock:
+                cached_data = self.question_cache.get(cache_key)
                 
-                # Update usage statistics
-                cached_data['last_used'] = time()
-                cached_data['times_used'] += 1
-                self.save_question_cache()
-                
-                return cached_data['correct_index']
+                if cached_data and self.validate_cache_entry(cached_data, choices):
+                    self.update_status(f"Found cached answer: Choice #{cached_data['correct_index'] + 1}")
+                    with self._thread_lock:
+                        self.statistics["cache_hits"] += 1
+                        self.save_statistics()
+                    
+                    # Update usage statistics
+                    cached_data['last_used'] = time()
+                    cached_data['times_used'] += 1
+                    self.save_question_cache()
+                    
+                    return cached_data['correct_index']
             
             if cached_data:
                 self.log("Cache entry found but validation failed", 'debug')
             else:
                 self.log("No cache entry found", 'debug')
             
-            self.statistics["cache_misses"] += 1
-            self.save_statistics()
+            with self._thread_lock:
+                self.statistics["cache_misses"] += 1
+                self.save_statistics()
             return None
             
         except Exception as e:
@@ -456,14 +595,39 @@ class VocabAutomation:
                 elif isinstance(value, str):
                     options.add_argument(f"--{option.replace('_', '-')}={value}")
             
-            # Create driver with simple options
-            self.driver = uc.Chrome(options=options)
-            self.wait = WebDriverWait(self.driver, 10)
+            # Create driver with additional error handling
+            self.driver = None  # Ensure driver is None before creating new one
             
-            self.update_status("Browser setup successful")
+            try:
+                self.driver = uc.Chrome(options=options)
+                if not self.driver:
+                    raise Exception("Driver creation failed")
+                
+                # Test driver with simple command and verify it's responsive
+                try:
+                    self.driver.get("about:blank")
+                    _ = self.driver.current_url  # Verify browser responds
+                except Exception as e:
+                    raise Exception(f"Browser not responsive after creation: {str(e)}")
+                
+                # Create WebDriverWait with timeout
+                self.wait = WebDriverWait(self.driver, 10)
+                
+                self.update_status("Browser setup successful")
+                
+            except Exception as e:
+                self.update_status(f"Error creating Chrome driver: {str(e)}")
+                if self.driver:
+                    try:
+                        self.driver.quit()
+                    except:
+                        pass
+                    self.driver = None
+                raise
             
         except Exception as e:
             self.update_status(f"Error setting up browser: {str(e)}")
+            self.cleanup()  # Ensure cleanup runs if setup fails
             raise
 
     def check_if_wrong(self, current_question, timeout=3):
@@ -503,28 +667,44 @@ class VocabAutomation:
             return True
 
     def get_openai_response(self, question, choices, previous_wrong_answers=None):
-        self.update_status("Getting AI response...")
-        prompt = f"Question: {question}\nChoices:\n"
-        for i, choice in enumerate(choices, start=1):
-            prompt += f"{i}. {choice}\n"
-        
-        if previous_wrong_answers:
-            prompt += "\nPrevious incorrect answers were: "
-            prompt += ", ".join([f"choice {i+1}" for i in previous_wrong_answers])
-            prompt += ". Please choose a different answer."
-        
-        prompt += "\nWhich one is correct? Just respond with the number (1-4)."
+        """Get response from GPT with improved reliability"""
+        if not question or not choices:
+            self.log("Invalid input for OpenAI request", 'error')
+            return None
 
         try:
-            completion = self.client.chat.completions.create(
+            self.update_status("Getting AI response...")
+            
+            # Build the prompt
+            prompt = f"Question: {question}\nChoices:\n"
+            for i, choice in enumerate(choices, start=1):
+                prompt += f"{i}. {choice}\n"
+            
+            if previous_wrong_answers:
+                prompt += "\nPrevious incorrect answers were: "
+                prompt += ", ".join([f"choice {i+1}" for i in previous_wrong_answers])
+                prompt += ". Please choose a different answer."
+            
+            prompt += "\nWhich one is correct? Just respond with the number (1-4)."
+
+            # Make API call
+            response = self.client.chat.completions.create(
                 model="gpt-3.5-turbo",
                 messages=[{"role": "user", "content": prompt}]
             )
-            answer = completion.choices[0].message.content.strip()
+            
+            if not response or not response.choices:
+                return None
+                
+            answer = response.choices[0].message.content.strip()
+            if not answer:
+                return None
+                
             self.update_status(f"AI suggested answer: {answer}")
             return answer
+
         except Exception as e:
-            self.update_status(f"Error getting AI response: {str(e)}")
+            self.log(f"Error getting OpenAI response: {str(e)}", 'error')
             return None
 
     def solve_audio_question(self, current_container):
@@ -855,124 +1035,213 @@ class VocabAutomation:
         self.completion_callback = callback
 
     def run(self):
+        """Main automation loop with improved terminal UI"""
         try:
-            self.setup_browser()
-            self.driver.get("https://www.vocabulary.com/account/activities/")
-            self.update_status("Please sign in, select your assignment, then click 'Ready to Start'")
-            
-            # Wait for user to be ready
-            while not self.ready_to_start and self.running:
-                sleep(1)
-                continue
+            # Initialize browser
+            with self._driver_lock:
+                if not self.driver:
+                    try:
+                        self.setup_browser()
+                        logging.info("Browser setup successful")
+                    except Exception as e:
+                        logging.error(f"Failed to initialize browser: {str(e)}")
+                        return
+                
+                try:
+                    self.driver.get("https://www.vocabulary.com/account/activities/")
+                except Exception as e:
+                    logging.error(f"Failed to load initial page: {str(e)}")
+                    self.cleanup()
+                    return
 
-            if not self.running:
-                return
-
-            self.update_status(f"Starting automation (Cache size: {len(self.question_cache)} entries)")
+            # Clear screen and show initial UI
+            self.ui.update_display(
+                status="Please sign in and select your assignment in the browser window.",
+                stats=self.statistics
+            )
             
+            console.print("\nPress Enter when you're ready to start...")
+            input()
+            self.ready_to_start = True
+
+            self.ui.update_display(
+                status="Starting automation...",
+                stats=self.statistics
+            )
+            
+            # Main automation loop
             while self.running:
                 try:
                     if not self.running:
                         break
 
-                    if self.check_achievement() or self.check_round_complete():
-                        continue
-
-                    if self.check_finished():
+                    # Verify browser is still responsive
+                    try:
+                        with self._driver_lock:
+                            _ = self.driver.current_url
+                    except Exception as e:
+                        logging.error(f"Browser became unresponsive: {str(e)}")
                         break
 
-                    question, choices, links = self.get_question_and_choices()
-                    
-                    if not all([links]):  # Only check links since choices might be empty for image questions
-                        sleep(1)
+                    # Check status updates
+                    if self.check_status_updates():
                         continue
 
-                    # Handle image question
-                    if question == "image_question":
-                        self.handle_image_question(self.last_question_container, links)
-                        continue
+                    # Process question
+                    result = self.process_question()
+                    if not result:
+                        sleep(0.5)
 
-                    # Try cached answer first
-                    try:
-                        cached_index = self.get_cached_answer(question, choices)
-                        if cached_index is not None and 0 <= cached_index < len(links):
-                            self.update_status(f"Using cached answer: {choices[cached_index]}")
-                            links[cached_index].click()
-                            
-                            if not self.check_if_wrong(question):
-                                self.handle_answer_result(question, choices, cached_index, True)
-                                continue
-                            else:
-                                self.update_status("Cached answer was wrong, removing from cache and trying AI...")
-                                cache_key = self.get_cache_key(question, choices)
-                                if cache_key in self.question_cache:
-                                    del self.question_cache[cache_key]
-                                    self.save_question_cache()
-                    except Exception as e:
-                        self.update_status(f"Error using cached answer: {str(e)}")
-
-                    # If no cache hit or cached answer was wrong, try AI
-                    wrong_answers = []
-                    max_retries = 4
-                    
-                    for attempt in range(max_retries):
-                        if not self.running:
-                            break
-                            
-                        try:
-                            answer = self.get_openai_response(question, choices, wrong_answers)
-                            
-                            if answer and (match := re.search(r"[1-4]", answer)):
-                                choice_index = int(match.group()) - 1
-                                if 0 <= choice_index < len(links):
-                                    if choice_index in wrong_answers:
-                                        self.update_status("AI suggested a previously wrong answer, trying again...")
-                                        continue
-                                    
-                                    try:
-                                        links[choice_index].click()
-                                        self.update_status(f"Selected answer: {choices[choice_index]}")
-                                        
-                                        # Check if the answer was wrong
-                                        if self.check_if_wrong(question):
-                                            wrong_answers.append(choice_index)
-                                            self.handle_answer_result(question, choices, choice_index, False)
-                                            
-                                            if attempt < max_retries - 1:
-                                                self.update_status(f"Answer was wrong, trying again... (Attempt {attempt + 2}/{max_retries})")
-                                                continue
-                                        else:
-                                            self.handle_answer_result(question, choices, choice_index, True)
-                                            break
-                                    except Exception as e:
-                                        self.update_status(f"Error clicking answer: {str(e)}")
-                                        continue
-                                else:
-                                    self.update_status("Invalid answer index")
-                                    self.statistics["wrong_answers"] += 1
-                                    self.save_statistics()
-                            else:
-                                self.update_status("Could not determine answer")
-                                self.statistics["wrong_answers"] += 1
-                                self.save_statistics()
-                        except Exception as e:
-                            self.update_status(f"Error in answer attempt {attempt + 1}: {str(e)}")
-                            continue
-
-                    sleep(1)
                 except Exception as e:
-                    self.update_status(f"Error in main loop: {str(e)}")
-                    sleep(2)
-                    continue
+                    logging.error(f"Error in main loop: {str(e)}")
+                    sleep(1)
 
         except Exception as e:
-            self.update_status(f"Critical error in automation: {str(e)}")
-            raise
+            logging.error(f"Critical error in automation: {str(e)}")
         finally:
             self.cleanup()
 
+    def check_status_updates(self):
+        """Check for achievements, round completion, or finish state"""
+        try:
+            with self._driver_lock:
+                if self.check_achievement():
+                    return True
+                if self.check_round_complete():
+                    return True
+                if self.check_finished():
+                    return True
+            return False
+        except Exception as e:
+            self.update_status(f"Error checking status: {str(e)}")
+            return False
+
+    def process_question(self):
+        """Process a single question with UI updates"""
+        try:
+            question, choices, links = self.get_question_and_choices()
+            if not all([links]):
+                return False
+
+            if question == "image_question":
+                self.update_status("Processing image question...")
+                return self.handle_image_question(self.last_question_container, links)
+
+            self.update_question(question)
+            return self.process_answer(question, choices, links)
+
+        except Exception as e:
+            logging.error(f"Error processing question: {str(e)}")
+            return False
+
+    def process_answer(self, question, choices, links):
+        """Process an answer with improved reliability"""
+        if not self.running or not question or not choices or not links:
+            return False
+
+        try:
+            # Try cached answer first
+            cached_index = self.get_cached_answer(question, choices)
+            if cached_index is not None:
+                try:
+                    if self.try_answer(cached_index, choices, links):
+                        return True
+                except Exception as e:
+                    self.log(f"Error trying cached answer: {str(e)}", 'error')
+
+            # Try AI-based answer
+            wrong_answers = []
+            max_retries = 4
+
+            for attempt in range(max_retries):
+                if not self.running:
+                    return False
+
+                # Get AI response
+                try:
+                    answer = self.get_openai_response(question, choices, wrong_answers)
+                    if not answer:
+                        sleep(1)
+                        continue
+
+                    match = re.search(r"[1-4]", answer)
+                    if not match:
+                        self.log(f"No valid choice number found in response: {answer}", 'error')
+                        sleep(1)
+                        continue
+
+                    choice_index = int(match.group()) - 1
+                    if choice_index in wrong_answers:
+                        self.log(f"Skipping previously wrong answer: {choice_index + 1}", 'info')
+                        sleep(1)
+                        continue
+
+                    if not (0 <= choice_index < len(links)):
+                        self.log(f"Invalid choice index: {choice_index}", 'error')
+                        sleep(1)
+                        continue
+
+                    # Try clicking the answer
+                    try:
+                        links[choice_index].click()
+                        self.update_status(f"Selected answer: {choices[choice_index]}")
+                    except Exception as e:
+                        self.log(f"Error clicking answer: {str(e)}", 'error')
+                        sleep(1)
+                        continue
+
+                    # Check if answer was correct
+                    result = self.check_if_wrong(self.last_question_text)
+                    if not result:
+                        self.handle_answer_result(self.last_question_text, choices, choice_index, True)
+                        return True
+                    else:
+                        self.handle_answer_result(self.last_question_text, choices, choice_index, False)
+                        wrong_answers.append(choice_index)
+
+                except Exception as e:
+                    self.log(f"Error processing answer: {str(e)}", 'error')
+                    sleep(1)
+                    continue
+
+                sleep(1)
+
+            self.log("Exhausted all retry attempts", 'error')
+            return False
+
+        except Exception as e:
+            self.log(f"Critical error in process_answer: {str(e)}", 'error')
+            return False
+
+    def try_answer(self, choice_index, choices, links):
+        """Try a single answer with proper error handling"""
+        if not (0 <= choice_index < len(links)):
+            return False
+
+        try:
+            # Try clicking the answer
+            try:
+                links[choice_index].click()
+                self.update_status(f"Selected answer: {choices[choice_index]}")
+            except Exception as e:
+                self.log(f"Error clicking answer: {str(e)}", 'error')
+                return False
+
+            # Check if answer was correct
+            result = self.check_if_wrong(self.last_question_text)
+            if not result:
+                self.handle_answer_result(self.last_question_text, choices, choice_index, True)
+                return True
+            else:
+                self.handle_answer_result(self.last_question_text, choices, choice_index, False)
+                return False
+
+        except Exception as e:
+            self.log(f"Error trying answer: {str(e)}", 'error')
+            return False
+
     def cleanup(self):
-        """Clean up resources"""
+        """Thread-safe cleanup of resources"""
         with self._cleanup_lock:
             if self._cleanup_called:
                 return
@@ -984,19 +1253,21 @@ class VocabAutomation:
             
             # Save data first
             try:
-                self.save_statistics()
-                self.save_question_cache()
+                with self._thread_lock:
+                    self.save_statistics()
+                    self.save_question_cache()
             except Exception as e:
                 self.log(f"Error saving data: {str(e)}", 'error')
             
             # Clean up browser
-            if hasattr(self, 'driver') and self.driver:
-                try:
-                    self.driver.quit()
-                except Exception as e:
-                    self.log(f"Error quitting driver: {str(e)}", 'error')
-                finally:
-                    self.driver = None
+            with self._driver_lock:
+                if hasattr(self, 'driver') and self.driver:
+                    try:
+                        self.driver.quit()
+                    except Exception as e:
+                        self.log(f"Error quitting driver: {str(e)}", 'error')
+                    finally:
+                        self.driver = None
             
             # Force garbage collection
             gc.collect()

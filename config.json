@@ -6,5 +6,7 @@
     "disable_dev_shm_usage": true,
     "suppress_errors": true,
     "window_size": "1920,1079"
-  }
+  },
+  "enable_logging": false,
+  "log_level": "INFO"
 }
