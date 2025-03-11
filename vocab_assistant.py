@@ -194,6 +194,7 @@ class MainWindow(QMainWindow):
         self.automation_thread = None
         self.setup_logging()
         self.init_ui()
+        self._cleanup_in_progress = False
 
     def setup_logging(self):
         self.log_handler = QTextEditLogger(self)
@@ -399,17 +400,26 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Error", str(e))
 
     def stop_automation(self):
-        if self.automation_thread:
-            self.automation_thread.stop()
-            self.automation_thread.wait()
-            self.automation_thread = None
-            
-        self.toggle_btn.setText("Start Automation")
-        self.toggle_btn.setProperty("running", False)
-        self.toggle_btn.setStyleSheet(self.toggle_btn.styleSheet())
-        self.ready_btn.setEnabled(False)
-        self.progress_bar.hide()
-        self.config_widget.setEnabled(True)
+        """Stop automation and cleanup resources"""
+        if self._cleanup_in_progress:
+            return
+
+        self._cleanup_in_progress = True
+        try:
+            if self.automation_thread:
+                if self.automation_thread.isRunning():
+                    self.automation_thread.stop()
+                    self.automation_thread.wait(5000)  # Wait up to 5 seconds
+                self.automation_thread = None
+
+            self.toggle_btn.setText("Start Automation")
+            self.toggle_btn.setProperty("running", False)
+            self.toggle_btn.setStyleSheet(self.toggle_btn.styleSheet())
+            self.ready_btn.setEnabled(False)
+            self.progress_bar.hide()
+            self.config_widget.setEnabled(True)
+        finally:
+            self._cleanup_in_progress = False
 
     def ready_to_start(self):
         if self.automation_thread and self.automation_thread.isRunning():
@@ -434,34 +444,37 @@ class MainWindow(QMainWindow):
 
     def handle_completion(self):
         """Handle automation completion on the main thread"""
-        QMessageBox.information(self, "Assignment Complete", 
-            "The current assignment has been completed!\n\n"
-            "To start a new assignment:\n"
-            "1. Select your next assignment\n"
-            "2. Click 'Start Automation'\n"
-            "3. Click 'Ready to Start' when ready"
-        )
-        self.toggle_btn.setText("Start Automation")
-        self.toggle_btn.setProperty("running", False)
-        self.toggle_btn.setStyleSheet(self.toggle_btn.styleSheet())
+        if not self._cleanup_in_progress:
+            self.stop_automation()
+            QMessageBox.information(self, "Assignment Complete", 
+                "The current assignment has been completed!\n\n"
+                "To start a new assignment:\n"
+                "1. Select your next assignment\n"
+                "2. Click 'Start Automation'\n"
+                "3. Click 'Ready to Start' when ready"
+            )
 
     def closeEvent(self, event):
-        # Stop automation if running
-        if self.automation_thread and self.automation_thread.isRunning():
-            self.automation_thread.automation.stop()  # Stop the automation first
-            self.automation_thread.quit()  # Request thread termination
-            self.automation_thread.wait(5000)  # Wait up to 5 seconds for thread to finish
-            
-        # Close any open file handles
-        logging.getLogger().removeHandler(self.log_handler)
-        if hasattr(self.log_handler.widget, 'document'):
-            self.log_handler.widget.document().clear()
-            
-        # Accept the close event
-        event.accept()
-        
-        # Ensure the application exits properly
-        QApplication.quit()
+        """Handle application close event"""
+        self._cleanup_in_progress = True
+        try:
+            # Stop automation if running
+            if self.automation_thread:
+                if self.automation_thread.isRunning():
+                    self.automation_thread.stop()
+                    self.automation_thread.wait(5000)  # Wait up to 5 seconds
+                self.automation_thread = None
+
+            # Close any open file handles
+            logging.getLogger().removeHandler(self.log_handler)
+            if hasattr(self.log_handler.widget, 'document'):
+                self.log_handler.widget.document().clear()
+
+            # Accept the close event
+            event.accept()
+        finally:
+            self._cleanup_in_progress = False
+            QApplication.quit()
 
 class AutomationThread(QThread):
     status_update = pyqtSignal(str)
