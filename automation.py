@@ -189,18 +189,19 @@ class VocabAutomation:
         self.wait = None
         self.chrome_log_file = None
         self.completion_callback = None
-        self.cache_expiry_days = 30  # Cache entries expire after 30 days
-        self.max_cache_size = 1000  # Maximum number of entries in cache
+        self.cache_expiry_days = 30
+        self.max_cache_size = 1000
         self.browser_setup_retries = 3
         self.browser_setup_delay = 2
         self._cleanup_lock = threading.Lock()
         self._cleanup_called = False
+        self._completion_called = False
         
         try:
             self.setup_openai()
             self.load_statistics()
             self.load_question_cache()
-            self.prune_cache()  # Clean up old cache entries
+            self.prune_cache()
             
             if not skip_browser_setup:
                 self.setup_browser()
@@ -648,8 +649,9 @@ class VocabAutomation:
                 # Stop the automation
                 self.running = False
                 
-                # Call completion callback if set
-                if self.completion_callback:
+                # Call completion callback if set and not already called
+                if self.completion_callback and not self._completion_called:
+                    self._completion_called = True
                     self.completion_callback()
                     
                 return True
@@ -1008,7 +1010,7 @@ class VocabAutomation:
         except Exception as e:
             self.log(f"Error during cleanup: {str(e)}", 'error')
         finally:
-            self._cleanup_called = True
+            self._cleanup_called = False  # Reset flag to allow future cleanup attempts if needed
 
     def stop(self):
         """Stop automation and clean up"""
