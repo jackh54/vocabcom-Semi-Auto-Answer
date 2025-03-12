@@ -27,6 +27,7 @@ from rich.live import Live
 from rich.table import Table
 from rich import box
 from datetime import datetime
+import random
 
 # Initialize rich console
 console = Console()
@@ -279,6 +280,10 @@ class VocabAutomation:
         self.last_question_container = None
         self.last_input_field = None
         
+        # Setup wait times from config or use defaults
+        self.min_wait_time = config.get('min_wait_time', 2)
+        self.max_wait_time = config.get('max_wait_time', 5)
+        
         # Callbacks
         self.status_callback = status_callback
         self.stats_callback = stats_callback
@@ -397,18 +402,30 @@ class VocabAutomation:
         try:
             # Remove context and any extra whitespace/newlines
             question = re.sub(r'Context:.*$', '', question, flags=re.MULTILINE).strip()
-            question = re.sub(r'\s+', ' ', question).lower()
             
-            # Remove punctuation and normalize whitespace
-            question = re.sub(r'[^\w\s]', '', question)
+            # Normalize question text
+            question = question.lower()
+            # Remove all punctuation except apostrophes (they can be meaningful)
+            question = re.sub(r'[^\w\s\']', '', question)
+            # Normalize whitespace
             question = ' '.join(question.split())
             
-            # Normalize and sort choices (remove punctuation and extra spaces)
-            choices = [re.sub(r'[^\w\s]', '', choice.lower().strip()) for choice in choices]
-            choices = [' '.join(choice.split()) for choice in choices]
-            choices.sort()
+            # Normalize and sort choices
+            normalized_choices = []
+            for choice in choices:
+                # Convert to lowercase
+                choice = choice.lower()
+                # Remove all punctuation except apostrophes
+                choice = re.sub(r'[^\w\s\']', '', choice)
+                # Normalize whitespace
+                choice = ' '.join(choice.split())
+                normalized_choices.append(choice)
             
-            cache_key = f"{question}|{'|'.join(choices)}"
+            # Sort choices for consistent ordering
+            normalized_choices.sort()
+            
+            # Create cache key combining question and choices
+            cache_key = f"{question}|{'|'.join(normalized_choices)}"
             self.log(f"Cache key generated: {cache_key}", 'debug')
             return cache_key
         except Exception as e:
@@ -422,29 +439,46 @@ class VocabAutomation:
                 self.log("Invalid cache entry format", 'debug')
                 return False
             
-            if 'correct_index' not in entry or not isinstance(entry['correct_index'], int):
-                self.log("Missing or invalid correct_index in cache entry", 'debug')
+            required_fields = ['correct_index', 'choices', 'correct_answer', 'normalized_answer']
+            if not all(field in entry for field in required_fields):
+                self.log("Missing required fields in cache entry", 'debug')
                 return False
             
-            if 'choices' not in entry or not entry['choices']:
-                self.log("Missing choices in cache entry", 'debug')
+            if not isinstance(entry['correct_index'], int):
+                self.log("Invalid correct_index type in cache entry", 'debug')
                 return False
             
-            # Normalize both sets of choices (remove punctuation and extra spaces)
-            cached_choices = [re.sub(r'[^\w\s]', '', choice.lower().strip()) for choice in entry['choices']]
-            cached_choices = [' '.join(choice.split()) for choice in cached_choices]
+            # Normalize current choices
+            current_choices = []
+            for choice in choices:
+                # Convert to lowercase
+                choice = choice.lower()
+                # Remove all punctuation except apostrophes
+                choice = re.sub(r'[^\w\s\']', '', choice)
+                # Normalize whitespace
+                choice = ' '.join(choice.split())
+                current_choices.append(choice)
             
-            current_choices = [re.sub(r'[^\w\s]', '', choice.lower().strip()) for choice in choices]
-            current_choices = [' '.join(choice.split()) for choice in current_choices]
-            
-            cached_choices.sort()
+            # Sort both sets of choices
             current_choices.sort()
+            cached_choices = sorted(entry['choices'])
             
             # Debug output
             self.log(f"Cached choices: {cached_choices}", 'debug')
             self.log(f"Current choices: {current_choices}", 'debug')
             
-            return cached_choices == current_choices
+            # Check if choices match (order-independent)
+            if current_choices != cached_choices:
+                self.log("Choices don't match exactly", 'debug')
+                return False
+            
+            # Verify the cached answer exists in current choices (normalized comparison)
+            cached_normalized = entry['normalized_answer']
+            if not any(choice == cached_normalized for choice in current_choices):
+                self.log("Cached answer not found in current choices", 'debug')
+                return False
+            
+            return True
             
         except Exception as e:
             self.log(f"Error validating cache entry: {str(e)}", 'error')
@@ -484,10 +518,12 @@ class VocabAutomation:
         """Thread-safe cache access"""
         try:
             if not question or not choices:
+                self.log("Invalid input for cache lookup", 'debug')
                 return None
             
             cache_key = self.get_cache_key(question, choices)
             if not cache_key:
+                self.log("Failed to generate cache key", 'debug')
                 return None
             
             self.log(f"Looking up cache key: {cache_key}", 'debug')
@@ -495,28 +531,54 @@ class VocabAutomation:
             with self._thread_lock:
                 cached_data = self.question_cache.get(cache_key)
                 
-                if cached_data and self.validate_cache_entry(cached_data, choices):
-                    self.update_status(f"Found cached answer: Choice #{cached_data['correct_index'] + 1}")
-                    with self._thread_lock:
-                        self.statistics["cache_hits"] += 1
-                        self.save_statistics()
+                if not cached_data:
+                    self.log("No cache entry found", 'debug')
+                    self.statistics["cache_misses"] += 1
+                    self.save_statistics()
+                    return None
+                
+                if not self.validate_cache_entry(cached_data, choices):
+                    self.log("Cache entry validation failed", 'debug')
+                    self.statistics["cache_misses"] += 1
+                    self.save_statistics()
+                    return None
+                
+                # Find the index of the cached answer in current choices
+                cached_answer = cached_data['correct_answer']
+                cached_normalized = cached_data['normalized_answer']
+                
+                # Try to find the matching choice
+                found_index = None
+                for i, choice in enumerate(choices):
+                    # Check exact match first
+                    if choice == cached_answer:
+                        found_index = i
+                        break
                     
-                    # Update usage statistics
-                    cached_data['last_used'] = time()
-                    cached_data['times_used'] += 1
-                    self.save_question_cache()
-                    
-                    return cached_data['correct_index']
-            
-            if cached_data:
-                self.log("Cache entry found but validation failed", 'debug')
-            else:
-                self.log("No cache entry found", 'debug')
-            
-            with self._thread_lock:
-                self.statistics["cache_misses"] += 1
+                    # If no exact match, try normalized comparison
+                    normalized_choice = re.sub(r'[^\w\s\']', '', choice.lower())
+                    normalized_choice = ' '.join(normalized_choice.split())
+                    if normalized_choice == cached_normalized:
+                        found_index = i
+                        break
+                
+                if found_index is None:
+                    self.log("Cached answer not found in current choices", 'debug')
+                    self.statistics["cache_misses"] += 1
+                    self.save_statistics()
+                    return None
+                
+                # Cache hit - update statistics
+                self.update_status(f"Found cached answer: {cached_answer}")
+                self.statistics["cache_hits"] += 1
                 self.save_statistics()
-            return None
+                
+                # Update usage statistics
+                cached_data['last_used'] = time()
+                cached_data['times_used'] += 1
+                self.save_question_cache()
+                
+                return found_index
             
         except Exception as e:
             self.log(f"Error accessing cache: {str(e)}", 'error')
@@ -526,28 +588,45 @@ class VocabAutomation:
         """Cache a correct answer for future use"""
         try:
             if not question or not choices or correct_index is None:
+                self.log("Invalid input for caching answer", 'debug')
                 return
             
             cache_key = self.get_cache_key(question, choices)
             if not cache_key:
+                self.log("Failed to generate cache key for storing answer", 'debug')
                 return
             
             current_time = time()
             
-            # Store normalized versions of the choices
-            normalized_choices = [re.sub(r'[^\w\s]', '', choice.lower().strip()) for choice in choices]
-            normalized_choices = [' '.join(choice.split()) for choice in normalized_choices]
+            # Get the correct answer text
+            correct_answer = choices[correct_index]
             
+            # Normalize choices for storage
+            normalized_choices = []
+            for choice in choices:
+                # Convert to lowercase
+                choice = choice.lower()
+                # Remove all punctuation except apostrophes
+                choice = re.sub(r'[^\w\s\']', '', choice)
+                # Normalize whitespace
+                choice = ' '.join(choice.split())
+                normalized_choices.append(choice)
+            
+            # Store both the index and the correct answer text
             self.question_cache[cache_key] = {
                 'correct_index': correct_index,
+                'correct_answer': correct_answer,  # Store the actual answer text
+                'normalized_answer': normalized_choices[correct_index],  # Store normalized version
                 'choices': normalized_choices,
                 'last_used': current_time,
                 'times_used': 1,
-                'first_seen': current_time
+                'first_seen': current_time,
+                'original_question': question,  # Store original for debugging
+                'original_choices': choices     # Store original for debugging
             }
             
             self.save_question_cache()
-            self.update_status(f"Added answer to cache: Choice #{correct_index + 1}")
+            self.update_status(f"Added answer to cache: {correct_answer}")
             
         except Exception as e:
             self.log(f"Error caching answer: {str(e)}", 'error')
@@ -903,23 +982,50 @@ class VocabAutomation:
     def get_question_and_choices(self):
         max_retries = 3
         retry_count = 0
+        page_reload_timeout = 7  # Seconds to wait before considering the page stuck
+        
+        def reset_question_tracking(self):
+            """Reset question tracking when reloading page"""
+            self.last_question_text = ""
+            self.last_question_container = None
+            self.last_input_field = None
+            self.update_status("Reset question tracking")
         
         while retry_count < max_retries and self.running:
             try:
+                start_time = time()
                 try:
                     self.wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, ".question")))
                 except TimeoutException:
-                    self.update_status("Timeout waiting for question, retrying...")
+                    current_time = time()
+                    if current_time - start_time >= page_reload_timeout:
+                        self.update_status("Page appears stuck, reloading...")
+                        self.driver.refresh()
+                        reset_question_tracking(self)
+                        wait_time = random.uniform(self.min_wait_time, self.max_wait_time)
+                        self.update_status(f"Waiting {wait_time:.1f} seconds for page to reload...")
+                        sleep(wait_time)
+                    else:
+                        self.update_status("Timeout waiting for question, retrying...")
+                        sleep(random.uniform(self.min_wait_time/2, self.min_wait_time))
                     retry_count += 1
-                    sleep(1)
                     continue
                     
                 question_containers = self.driver.find_elements(By.CSS_SELECTOR, ".question")
                 
                 if not question_containers:
-                    self.update_status("No questions found, retrying...")
+                    current_time = time()
+                    if current_time - start_time >= page_reload_timeout:
+                        self.update_status("No questions found after timeout, reloading page...")
+                        self.driver.refresh()
+                        reset_question_tracking(self)
+                        wait_time = random.uniform(self.min_wait_time, self.max_wait_time)
+                        self.update_status(f"Waiting {wait_time:.1f} seconds for page to reload...")
+                        sleep(wait_time)
+                    else:
+                        self.update_status("No questions found, retrying...")
+                        sleep(random.uniform(self.min_wait_time/2, self.min_wait_time))
                     retry_count += 1
-                    sleep(1)
                     continue
 
                 current_container = question_containers[-1]
@@ -927,13 +1033,33 @@ class VocabAutomation:
                 if current_container == self.last_question_container:
                     try:
                         self.update_status("Waiting for new question...")
-                        self.wait.until(EC.staleness_of(self.last_question_container))
+                        wait_start = time()
+                        while time() - wait_start < page_reload_timeout:
+                            try:
+                                if self.wait.until(EC.staleness_of(self.last_question_container)):
+                                    break
+                            except:
+                                sleep(0.5)
+                        else:
+                            self.update_status("Question appears stuck, reloading page...")
+                            self.driver.refresh()
+                            reset_question_tracking(self)
+                            wait_time = random.uniform(self.min_wait_time, self.max_wait_time)
+                            self.update_status(f"Waiting {wait_time:.1f} seconds for page to reload...")
+                            sleep(wait_time)
+                            retry_count += 1
+                            continue
+                            
                         question_containers = self.driver.find_elements(By.CSS_SELECTOR, ".question")
                         current_container = question_containers[-1]
                     except TimeoutException:
-                        self.update_status("Timeout waiting for new question, retrying...")
+                        self.update_status("Timeout waiting for new question, reloading page...")
+                        self.driver.refresh()
+                        reset_question_tracking(self)
+                        wait_time = random.uniform(self.min_wait_time, self.max_wait_time)
+                        self.update_status(f"Waiting {wait_time:.1f} seconds for page to reload...")
+                        sleep(wait_time)
                         retry_count += 1
-                        sleep(1)
                         continue
                 
                 self.last_question_container = current_container
@@ -947,7 +1073,7 @@ class VocabAutomation:
                     except Exception as e:
                         self.update_status(f"Error getting image question elements: {str(e)}")
                         retry_count += 1
-                        sleep(1)
+                        sleep(random.uniform(self.min_wait_time/2, self.min_wait_time))
                         continue
                 
                 # Check for audio question
@@ -978,14 +1104,23 @@ class VocabAutomation:
                     choices = [link.text.strip() for link in links]
 
                     if not any(choices):
-                        self.update_status("Waiting for choices to load...")
+                        current_time = time()
+                        if current_time - start_time >= page_reload_timeout:
+                            self.update_status("Choices not loading, reloading page...")
+                            self.driver.refresh()
+                            reset_question_tracking(self)
+                            wait_time = random.uniform(self.min_wait_time, self.max_wait_time)
+                            self.update_status(f"Waiting {wait_time:.1f} seconds for page to reload...")
+                            sleep(wait_time)
+                        else:
+                            self.update_status("Waiting for choices to load...")
+                            sleep(random.uniform(self.min_wait_time/2, self.min_wait_time))
                         retry_count += 1
-                        sleep(1)
                         continue
                 except Exception as e:
                     self.update_status(f"Error getting choices: {str(e)}")
                     retry_count += 1
-                    sleep(1)
+                    sleep(random.uniform(self.min_wait_time/2, self.min_wait_time))
                     continue
 
                 # Get question
@@ -999,9 +1134,18 @@ class VocabAutomation:
                         question = f"{question}\nContext: {sentence_context}"
 
                     if question == self.last_question_text:
-                        self.update_status("Waiting for new question text...")
+                        current_time = time()
+                        if current_time - start_time >= page_reload_timeout:
+                            self.update_status("Question text unchanged, reloading page...")
+                            self.driver.refresh()
+                            reset_question_tracking(self)
+                            wait_time = random.uniform(self.min_wait_time, self.max_wait_time)
+                            self.update_status(f"Waiting {wait_time:.1f} seconds for page to reload...")
+                            sleep(wait_time)
+                        else:
+                            self.update_status("Waiting for new question text...")
+                            sleep(random.uniform(self.min_wait_time/2, self.min_wait_time))
                         retry_count += 1
-                        sleep(1)
                         continue
 
                     self.last_question_text = question
@@ -1010,18 +1154,27 @@ class VocabAutomation:
                 except Exception as e:
                     self.update_status(f"Error getting question text: {str(e)}")
                     retry_count += 1
-                    sleep(1)
+                    sleep(random.uniform(self.min_wait_time/2, self.min_wait_time))
                     continue
 
             except StaleElementReferenceException:
-                self.update_status("Element became stale, retrying...")
+                current_time = time()
+                if current_time - start_time >= page_reload_timeout:
+                    self.update_status("Element became stale, reloading page...")
+                    self.driver.refresh()
+                    reset_question_tracking(self)
+                    wait_time = random.uniform(self.min_wait_time, self.max_wait_time)
+                    self.update_status(f"Waiting {wait_time:.1f} seconds for page to reload...")
+                    sleep(wait_time)
+                else:
+                    self.update_status("Element became stale, retrying...")
+                    sleep(random.uniform(self.min_wait_time/2, self.min_wait_time))
                 retry_count += 1
-                sleep(1)
                 continue
             except Exception as e:
                 self.update_status(f"Error getting question: {str(e)}")
                 retry_count += 1
-                sleep(1)
+                sleep(random.uniform(self.min_wait_time/2, self.min_wait_time))
                 continue
         
         self.update_status("Failed to get question after multiple attempts")
@@ -1101,10 +1254,40 @@ class VocabAutomation:
         finally:
             self.cleanup()
 
+    def check_countdown_blocker(self):
+        """Check for and handle countdown blocker"""
+        try:
+            blocker = self.driver.find_elements(By.CSS_SELECTOR, "div.blocker")
+            if blocker:
+                countdown = self.driver.find_elements(By.CSS_SELECTOR, "div.blocker .countdown")
+                if countdown:
+                    try:
+                        wait_time = int(countdown[0].text.strip())
+                        self.update_status(f"Countdown blocker detected: waiting {wait_time} seconds...")
+                        sleep(wait_time + 0.5)  # Add small buffer
+                        return True
+                    except (ValueError, AttributeError):
+                        # If we can't parse the countdown, use configured wait time
+                        wait_time = random.uniform(self.min_wait_time, self.max_wait_time)
+                        self.update_status(f"Countdown detected: waiting {wait_time:.1f} seconds...")
+                        sleep(wait_time)
+                        return True
+                else:
+                    # Blocker without countdown, use configured wait time
+                    wait_time = random.uniform(self.min_wait_time, self.max_wait_time)
+                    self.update_status(f"Blocker detected: waiting {wait_time:.1f} seconds...")
+                    sleep(wait_time)
+                    return True
+        except Exception as e:
+            self.update_status(f"Error checking countdown blocker: {str(e)}")
+        return False
+
     def check_status_updates(self):
-        """Check for achievements, round completion, or finish state"""
+        """Check for achievements, round completion, finish state, or blockers"""
         try:
             with self._driver_lock:
+                if self.check_countdown_blocker():
+                    return True
                 if self.check_achievement():
                     return True
                 if self.check_round_complete():
@@ -1161,33 +1344,36 @@ class VocabAutomation:
                 try:
                     answer = self.get_openai_response(question, choices, wrong_answers)
                     if not answer:
-                        sleep(1)
+                        sleep(random.uniform(self.min_wait_time/2, self.min_wait_time))
                         continue
 
                     match = re.search(r"[1-4]", answer)
                     if not match:
                         self.log(f"No valid choice number found in response: {answer}", 'error')
-                        sleep(1)
+                        sleep(random.uniform(self.min_wait_time/2, self.min_wait_time))
                         continue
 
                     choice_index = int(match.group()) - 1
                     if choice_index in wrong_answers:
                         self.log(f"Skipping previously wrong answer: {choice_index + 1}", 'info')
-                        sleep(1)
+                        sleep(random.uniform(self.min_wait_time/2, self.min_wait_time))
                         continue
 
                     if not (0 <= choice_index < len(links)):
                         self.log(f"Invalid choice index: {choice_index}", 'error')
-                        sleep(1)
+                        sleep(random.uniform(self.min_wait_time/2, self.min_wait_time))
                         continue
 
                     # Try clicking the answer
                     try:
                         links[choice_index].click()
                         self.update_status(f"Selected answer: {choices[choice_index]}")
+                        wait_time = random.uniform(self.min_wait_time/2, self.min_wait_time)
+                        self.update_status(f"Waiting {wait_time:.1f} seconds for response...")
+                        sleep(wait_time)
                     except Exception as e:
                         self.log(f"Error clicking answer: {str(e)}", 'error')
-                        sleep(1)
+                        sleep(random.uniform(self.min_wait_time/2, self.min_wait_time))
                         continue
 
                     # Check if answer was correct
@@ -1198,13 +1384,14 @@ class VocabAutomation:
                     else:
                         self.handle_answer_result(self.last_question_text, choices, choice_index, False)
                         wrong_answers.append(choice_index)
+                        wait_time = random.uniform(self.min_wait_time, self.max_wait_time)
+                        self.update_status(f"Wrong answer, waiting {wait_time:.1f} seconds before next attempt...")
+                        sleep(wait_time)
 
                 except Exception as e:
                     self.log(f"Error processing answer: {str(e)}", 'error')
-                    sleep(1)
+                    sleep(random.uniform(self.min_wait_time/2, self.min_wait_time))
                     continue
-
-                sleep(1)
 
             self.log("Exhausted all retry attempts", 'error')
             return False

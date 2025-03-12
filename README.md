@@ -40,7 +40,9 @@ pip install -r requirements.txt
         "disable_dev_shm_usage": true
     },
     "enable_logging": false,
-    "log_level": "INFO"
+    "log_level": "INFO",
+    "min_wait_time": 2,
+    "max_wait_time": 5
 }
 ```
 
@@ -74,13 +76,28 @@ python main.py
 - `enable_logging`: Enable/disable logging (true/false)
 - `log_level`: Set logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
 
+### Wait Time Options
+- `min_wait_time`: Minimum wait time between actions (default: 2 seconds)
+- `max_wait_time`: Maximum wait time between actions (default: 5 seconds)
+
 ## 📊 Features in Detail
 
 ### Answer Caching
-- Automatically caches correct answers
-- Reduces API calls for repeated questions
+- Intelligent text-based answer matching
+- Order-independent choice comparison
+- Normalized text matching (handles punctuation and case differences)
+- Stores both original and normalized answer text
+- Automatic validation of cached answers
 - Cache persists between sessions
 - Automatic cache cleanup for old entries
+- Improved reliability for repeated questions with different choice orders
+
+### Smart Answer Matching
+- Exact text matching for answer verification
+- Fallback to normalized text comparison
+- Handles variations in punctuation and formatting
+- Preserves important characters (like apostrophes)
+- Maintains answer accuracy across different choice orders
 
 ### Statistics Tracking
 - Correct/wrong answer counts
