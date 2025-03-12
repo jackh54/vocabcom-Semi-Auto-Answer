@@ -8,5 +8,7 @@
     "window_size": "1920,1079"
   },
   "enable_logging": false,
-  "log_level": "INFO"
+  "log_level": "INFO",
+  "min_wait_time": 2,
+  "max_wait_time": 5
 }
