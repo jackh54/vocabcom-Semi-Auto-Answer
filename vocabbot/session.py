@@ -83,6 +83,7 @@ class SessionStatus:
     correct: int = 0
     wrong: int = 0
     cache_hits: int = 0
+    assignments_done: int = 0
     ai_calls: int = 0
     started: float = field(default_factory=time.monotonic)
 
@@ -210,11 +211,11 @@ class Session:
         if self._exists(SEL_FINISHED):
             if not self._finished_seen:
                 self._finished_seen = True
-                self.log.info("Assignment complete")
-                self._set("waiting", "Assignment complete - open another one")
+                self.status.assignments_done += 1
+                self.log.info("Assignment complete (%d this run)", self.status.assignments_done)
+                self._set("done", "Assignment complete - open another one in this window")
             self._sleep(2)
             return
-        self._finished_seen = False
 
         self._count_achievements()
         if self._click_next():
@@ -223,7 +224,8 @@ class Session:
 
         if not self._exists(SEL_QUESTION):
             self._current = None
-            if self.status.state != "waiting":
+            # Keep showing "done" after the summary screen until the next assignment starts.
+            if self.status.state not in ("waiting", "done"):
                 self._set("waiting", "Sign in and open an assignment in this window")
             self._sleep(1)
             return
@@ -236,6 +238,7 @@ class Session:
         now = time.monotonic()
         if question.ident != self._current:
             self._current, self._current_since, self._current_done = question.ident, now, False
+            self._finished_seen = False  # a new question means a new (or resumed) assignment
             # Pace answers min_wait..max_wait seconds after the previous one (or after this
             # question appeared, if there was a break), however long the page or AI took.
             recent = self._last_answer is not None and now - self._last_answer < 30

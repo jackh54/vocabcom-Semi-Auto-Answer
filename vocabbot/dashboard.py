@@ -16,6 +16,7 @@ from .store import Store
 _STATE_STYLE = {
     "answering": "green",
     "waiting": "yellow",
+    "done": "bold green",
     "blocked": "yellow",
     "reloading": "magenta",
     "launching": "cyan",
@@ -39,6 +40,7 @@ def _render(sessions: list[Session], store: Store) -> Group:
     table.add_column("Wrong", justify="right", style="red")
     table.add_column("Cached", justify="right")
     table.add_column("AI", justify="right")
+    table.add_column("Done", justify="right", style="green")
     table.add_column("Time", justify="right", style="dim")
     table.add_column("Doing", ratio=1, no_wrap=True, overflow="ellipsis")
 
@@ -48,6 +50,7 @@ def _render(sessions: list[Session], store: Store) -> Group:
         # Text(...) so names/questions containing [brackets] aren't parsed as rich markup
         table.add_row(Text(label), Text(st.state, style=_STATE_STYLE.get(st.state, "")),
                       str(st.correct), str(st.wrong), str(st.cache_hits), str(st.ai_calls),
+                      str(st.assignments_done),
                       _runtime(st.started), Text(st.detail))
 
     c = store.counters()
