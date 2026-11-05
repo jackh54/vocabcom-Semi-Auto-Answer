@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import openai
-from selenium.common.exceptions import StaleElementReferenceException, WebDriverException
+from selenium.common.exceptions import NoSuchWindowException, StaleElementReferenceException, WebDriverException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.remote.webelement import WebElement
@@ -105,6 +105,11 @@ class Session:
                     self._tick()
                 except StaleElementReferenceException:
                     continue  # the page re-rendered mid-read; read it again
+                except NoSuchWindowException:
+                    # The tab we were driving is gone (closed by hand, or replaced by Chrome).
+                    if not self._recover_window():
+                        self._set("closed", "Browser window was closed")
+                        return
                 except WebDriverException as e:
                     if not self._browser_alive():
                         self._set("closed", "Browser window was closed")
@@ -120,7 +125,7 @@ class Session:
                 self._set("stopped", "")
 
     def _start_browser(self, attempts: int = 2) -> None:
-        """Chrome occasionally loses its first window during startup; one retry clears it."""
+        """Launch Chrome and open the start page. If the launch itself fails, retry once."""
         for attempt in range(1, attempts + 1):
             if self.stop.is_set():
                 return
@@ -131,7 +136,11 @@ class Session:
                     self._driver = driver
                 if self.stop.is_set():
                     return  # run()'s finally quits it
-                driver.get(START_URL)
+                try:
+                    driver.get(START_URL)
+                except NoSuchWindowException:
+                    if not self._recover_window():
+                        raise
                 return
             except WebDriverException:
                 self.close()
@@ -139,6 +148,27 @@ class Session:
                     raise
                 self.log.warning("Chrome failed to start, retrying", exc_info=True)
                 self._sleep(2)
+
+    def _recover_window(self) -> bool:
+        """Re-attach to a live tab. A freshly started Chrome sometimes swaps its first tab for a
+        new-tab page, leaving the driver on a dead tab ("web view not found"); a user can also
+        close the tab. Switches to the newest live tab and opens the start page if it is blank."""
+        try:
+            handles = self._d.window_handles
+        except WebDriverException:
+            return False
+        for handle in reversed(handles):
+            try:
+                self._d.switch_to.window(handle)
+                url = self._d.current_url
+            except WebDriverException:
+                continue
+            self.log.info("Switched to a live tab (%s)", url[:60])
+            if "vocabulary.com" not in url:
+                self._d.get(START_URL)
+                self._set("waiting", "Sign in and open an assignment in this window")
+            return True
+        return False
 
     def close(self) -> None:
         """Quit this session's browser only. Safe to call from any thread, more than once."""
