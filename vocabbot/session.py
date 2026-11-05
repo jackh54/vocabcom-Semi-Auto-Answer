@@ -21,7 +21,7 @@ from selenium.webdriver.remote.webelement import WebElement
 from . import browser
 from .answerer import Answerer
 from .config import Config
-from .store import Store
+from .store import Store, cache_key, normalize
 
 START_URL = "https://www.vocabulary.com/account/activities/"
 
@@ -34,7 +34,6 @@ SEL_AUDIO_BUTTON = "button.playword.ss-highvolume"
 SEL_SPELLING_INPUT = "input.wordspelling"
 SEL_SPELLING_WORD = "div.sentence.complete strong"
 SEL_NEXT = "button.next.active[aria-label='Next question']"
-SEL_WRONG = ".wrong"
 SEL_ACHIEVEMENT = ".hero.with-header-padding"
 SEL_ROUND_COMPLETE = "h1 svg.progress-icon"
 SEL_FINISHED = ".practiceComplete.activity-summary"
@@ -54,7 +53,10 @@ NAME_REFRESH = 60.0         # seconds between re-reading the signed-in name once
 NAME_REFRESH_UNKNOWN = 5.0  # ...and while waiting for the user to sign in
 
 STUCK_AFTER = 25.0     # seconds on one question with no progress before reloading the page
-RESULT_TIMEOUT = 4.0   # seconds to wait for the page to mark an answer right or wrong
+RESULT_TIMEOUT = 6.0   # seconds to wait for the page to mark an answer right or wrong
+
+# Outcomes of clicking a choice
+RIGHT, WRONG, NO_RESULT, NOT_CLICKED = "right", "wrong", "no response", "not clicked"
 
 
 @dataclass
@@ -64,6 +66,7 @@ class Question:
     text: str = ""
     choices: list[str] = field(default_factory=list)
     links: list[WebElement] = field(default_factory=list)
+    marked_wrong: set[int] = field(default_factory=set)   # choices the page already marked incorrect
 
     @property
     def ident(self) -> tuple[str, str]:
@@ -106,6 +109,7 @@ class Session:
         self._current_done = False
         self._finished_seen = False
         self._name_checked = 0.0
+        self._failed: dict[str, set[str]] = {}  # cache key -> normalized choices that failed
 
     # ---- lifecycle -----------------------------------------------------
 
@@ -259,9 +263,12 @@ class Session:
         el = containers[-1]  # older questions stay in the DOM; the newest is last
         classes = el.get_attribute("class") or ""
         links = el.find_elements(By.CSS_SELECTOR, SEL_CHOICES)
+        # Choices the site has already marked wrong (they stop accepting clicks), e.g. from
+        # an earlier attempt before a reload.
+        marked = {i for i, link in enumerate(links) if "incorrect" in (link.get_attribute("class") or "").split()}
 
         if "typeI" in classes or "multiple-image" in classes or el.get_attribute("data-template") == "multiple-image":
-            return Question(el, "image", links=links) if links else None
+            return Question(el, "image", links=links, marked_wrong=marked) if links else None
 
         if el.find_elements(By.CSS_SELECTOR, SEL_AUDIO_BUTTON) and el.find_elements(By.CSS_SELECTOR, SEL_SPELLING_INPUT):
             return Question(el, "spelling")
@@ -273,55 +280,88 @@ class Session:
         instructions = self._text(el, SEL_INSTRUCTIONS).replace("\n", " ")
         sentence = self._text(el, SEL_SENTENCE)
         text = f"{instructions}\nContext: {sentence}" if sentence else instructions
-        return Question(el, "choice", text=text, choices=choices, links=links)
+        return Question(el, "choice", text=text, choices=choices, links=links, marked_wrong=marked)
 
     # ---- answering -----------------------------------------------------
 
     def _answer_choice(self, q: Question) -> bool:
         self._set("answering", q.text.replace("\n", "  "))
-        tried: set[int] = set()
+        n = len(q.choices)
+
+        # Choices known to be wrong for this question: marked on the page, or failed earlier in
+        # this run (kept across retries and reloads, keyed by question + choices).
+        key = cache_key(q.text, q.choices)
+        if len(self._failed) > 500:
+            self._failed.clear()
+        failed = self._failed.setdefault(key, set())
+        tried = set(q.marked_wrong) | {i for i, c in enumerate(q.choices) if normalize(c) in failed}
+        if len(tried) >= n:  # everything "failed" without the page confirming: start over
+            failed.clear()
+            tried = set(q.marked_wrong)
+
+        def give_up_on(index: int) -> None:
+            tried.add(index)
+            failed.add(normalize(q.choices[index]))
 
         cached = self.store.lookup(q.text, q.choices)
+        if cached is not None and cached in tried:
+            self.log.info("Cached answer is marked wrong on the page, forgetting it: %s", q.choices[cached])
+            self.store.forget(q.text, q.choices)
+            cached = None
+
         if cached is not None:
-            outcome = self._try(q, cached)
-            if outcome is None:
+            result = self._try(q, cached)
+            if result == NOT_CLICKED:
                 return False
-            if outcome:
+            if result == RIGHT:
                 self._count("cache_hits")
                 self._count("correct_answers")
+                self._failed.pop(key, None)
                 return True
-            self.log.info("Cached answer was wrong, forgetting it: %s", q.choices[cached])
-            self.store.forget(q.text, q.choices)
-            self._count("wrong_answers")
-            tried.add(cached)
+            if result == WRONG:
+                self.log.info("Cached answer was wrong, forgetting it: %s", q.choices[cached])
+                self.store.forget(q.text, q.choices)
+                self._count("wrong_answers")
+            else:
+                self.log.info("No response to cached answer; trying another choice")
+            give_up_on(cached)
         else:
             self._count("cache_misses")
 
-        while len(tried) < len(q.choices) and not self.stop.is_set():
-            remaining = [i for i in range(len(q.choices)) if i not in tried]
+        while len(tried) < n and not self.stop.is_set():
+            remaining = [i for i in range(n) if i not in tried]
             index = remaining[0] if len(remaining) == 1 else self._ask_ai(q, tried)
-            if index is None:
+            if index is None or index in tried:
+                why = "no usable AI answer" if index is None else "AI repeated a wrong choice"
                 index = remaining[0]
-                self.log.info("No usable AI answer, guessing choice %d", index + 1)
+                self.log.info("%s, trying choice %d", why.capitalize(), index + 1)
 
-            outcome = self._try(q, index)
-            if outcome is None:
+            result = self._try(q, index)
+            if result == NOT_CLICKED:
                 return False
-            if outcome:
+            if result == RIGHT:
                 self.store.remember(q.text, q.choices, index)
                 self._count("correct_answers")
+                self._failed.pop(key, None)
                 return True
-            self._count("wrong_answers")
-            tried.add(index)
+            if result == WRONG:
+                self._count("wrong_answers")
+            else:
+                self.log.info("No response to %r; treating it as wrong", q.choices[index])
+            give_up_on(index)
         return False
 
     def _answer_image(self, q: Question) -> bool:
         self._set("answering", "Image question - trying each picture")
+        first = True
         for index in range(len(q.links)):
-            outcome = self._try(q, index, pause=None if index == 0 else 0.5)
-            if outcome is None:
+            if index in q.marked_wrong:
+                continue
+            result = self._try(q, index, pause=None if first else 0.5)
+            first = False
+            if result == NOT_CLICKED:
                 return False
-            if outcome:
+            if result == RIGHT:
                 self._count("correct_answers")
                 return True
         return False
@@ -335,13 +375,12 @@ class Session:
         self._set("answering", f"Spelling: {word}")
         if self._exists(SEL_NEXT):
             return False
-        wrong_before = self._count_wrong()
         box = q.element.find_element(By.CSS_SELECTOR, SEL_SPELLING_INPUT)
         box.clear()
         self._wait_for_turn()
         box.send_keys(word + Keys.RETURN)
         self._answered()
-        if self._await_result(wrong_before):
+        if self._await_result(None) == RIGHT:
             self._count("correct_answers")
             return True
         return False
@@ -354,27 +393,29 @@ class Session:
             self.log.warning("OpenAI request failed: %s", e)
             return None
 
-    def _try(self, q: Question, index: int, pause: float | None = None) -> bool | None:
-        """Click a choice. True = correct, False = wrong, None = couldn't tell (page changed / no response)."""
+    def _try(self, q: Question, index: int, pause: float | None = None) -> str:
+        """Click a choice and report RIGHT, WRONG, NO_RESULT (clicked, page didn't say), or
+        NOT_CLICKED (stopping, question already answered, or the click failed)."""
         if pause is None:
             self._wait_for_turn()
         else:
             self._sleep(pause)
         if self.stop.is_set():
-            return None
-
+            return NOT_CLICKED
         if self._exists(SEL_NEXT):
-            return None  # already answered; the next tick clicks Next. Clicking now would "confirm" any pick.
-        wrong_before = self._count_wrong()
+            return NOT_CLICKED  # already answered; the next tick clicks Next
+
+        link = q.links[index]
         try:
-            q.links[index].click()
+            link.click()
         except WebDriverException as e:
             self.log.info("Could not click choice %d: %s", index + 1, (e.msg or str(e)).splitlines()[0])
-            return None
+            return NOT_CLICKED
         self._answered()
         label = q.choices[index] if q.choices else f"picture {index + 1}"
-        self.log.info("Picked %r", label)
-        return self._await_result(wrong_before)
+        result = self._await_result(link)
+        self.log.info("Picked %r: %s", label, result)
+        return result
 
     def _schedule_next(self, base: float) -> None:
         self._answer_at = base + random.uniform(self.config.min_wait, self.config.max_wait)
@@ -387,17 +428,24 @@ class Session:
         self._last_answer = time.monotonic()
         self._schedule_next(self._last_answer)
 
-    def _await_result(self, wrong_before: int) -> bool | None:
-        """Wait for the page to react. Compares the count of `.wrong` marks so that a
-        wrong earlier attempt on the same question does not mask a correct retry."""
+    def _await_result(self, link: WebElement | None) -> str:
+        """Wait for the site's verdict. It adds class `incorrect` or `correct` to the clicked
+        choice once the server answers, and activates Next when the question is done."""
         deadline = time.monotonic() + RESULT_TIMEOUT
         while time.monotonic() < deadline and not self.stop.is_set():
-            if self._count_wrong() > wrong_before:
-                return False
+            if link is not None:
+                try:
+                    classes = (link.get_attribute("class") or "").split()
+                except StaleElementReferenceException:
+                    classes = []  # the page moved on; Next tells us how
+                if "incorrect" in classes:
+                    return WRONG
+                if "correct" in classes:
+                    return RIGHT
             if self._exists(SEL_NEXT):
-                return True
+                return RIGHT
             self._sleep(0.2)
-        return None
+        return NO_RESULT
 
     # ---- interstitials -------------------------------------------------
 
@@ -467,9 +515,6 @@ class Session:
 
     def _exists(self, selector: str) -> bool:
         return bool(self._d.find_elements(By.CSS_SELECTOR, selector))
-
-    def _count_wrong(self) -> int:
-        return len(self._d.find_elements(By.CSS_SELECTOR, SEL_WRONG))
 
     @staticmethod
     def _text(el: WebElement, selector: str) -> str:
