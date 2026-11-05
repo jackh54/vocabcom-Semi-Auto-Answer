@@ -1,8 +1,8 @@
-"""Run one or more Vocabulary.com sessions side by side.
+"""Run one or more Vocabulary.com sessions side by side, one per account.
 
-    python main.py                 # one session
-    python main.py -n 3            # three windows: session-1..session-3
-    python main.py -p alice -p bob # named sessions (each keeps its own login)
+    python main.py                 # pick saved accounts (or add new ones) from a list
+    python main.py -a alice -a bob # skip the list: run these accounts
+    python main.py -n 3            # three throwaway-named windows: session-1..session-3
 """
 from __future__ import annotations
 
@@ -16,7 +16,8 @@ from pathlib import Path
 import openai
 from rich.console import Console
 
-from vocabbot import browser, dashboard
+from vocabbot import accounts, browser, dashboard
+from vocabbot.accounts import valid_name
 from vocabbot.answerer import Answerer
 from vocabbot.config import ConfigError, load_config
 from vocabbot.session import Session
@@ -29,16 +30,20 @@ LOG_FILE = ROOT / "logs" / "vocabbot.log"
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Vocabulary.com answer automation")
-    parser.add_argument("-n", "--sessions", type=int, default=1,
-                        help="number of browser sessions to open (default 1)")
-    parser.add_argument("-p", "--profile", action="append", default=[], metavar="NAME",
-                        help="named session; repeat for more. Overrides -n. Each name keeps its own Chrome login")
+    parser.add_argument("-a", "--account", "-p", "--profile", dest="profile", action="append", default=[],
+                        metavar="NAME", help="account to run; repeat for more. New names are created. "
+                                             "Each account keeps its own saved login. Skips the picker")
+    parser.add_argument("-n", "--sessions", type=int, default=None,
+                        help="open N sessions named session-1..N instead of picking accounts")
     parser.add_argument("-c", "--config", type=Path, default=ROOT / "config.json")
     args = parser.parse_args(argv)
-    if args.sessions < 1:
+    if args.sessions is not None and args.sessions < 1:
         parser.error("--sessions must be at least 1")
     if len(set(args.profile)) != len(args.profile):
-        parser.error("profile names must be unique (two windows can't share one Chrome profile)")
+        parser.error("account names must be unique (two windows can't share one Chrome profile)")
+    bad = [n for n in args.profile if not valid_name(n)]
+    if bad:
+        parser.error(f"invalid account name {bad[0]!r}: use letters, numbers, - _ . (not only digits)")
     return args
 
 
@@ -53,22 +58,22 @@ def setup_logging(level: str) -> None:
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
 
-def claim_profiles(args: argparse.Namespace):
-    """Pick profile names this process can own. With -n, skip names another running
-    vocabbot already holds (so two terminals get session-1.. and session-2..).
-    Returns (names, lock handles), or (None, taken_name) if an explicit -p name is busy."""
+def claim_profiles(names: list[str] | None, count: int):
+    """Lock the profiles this process will use. With explicit names, every one must be free.
+    Without, take the first `count` free session-N names (so two terminals get different ones).
+    Returns (names, lock handles), or (None, taken_name) if an explicit name is busy."""
     profiles = DATA / "profiles"
-    if args.profile:
+    if names:
         locks = []
-        for name in args.profile:
+        for name in names:
             fh = browser.lock_profile(profiles / name)
             if fh is None:
                 return None, name
             locks.append(fh)
-        return list(args.profile), locks
+        return list(names), locks
 
     names, locks, i = [], [], 1
-    while len(names) < args.sessions:
+    while len(names) < count:
         fh = browser.lock_profile(profiles / f"session-{i}")
         if fh is not None:
             names.append(f"session-{i}")
@@ -100,10 +105,17 @@ def main(argv: list[str]) -> int:
     if imported:
         console.print(f"Imported {imported} cached answers from question_cache.json")
 
-    names, profile_locks = claim_profiles(args)
+    names = args.profile
+    if not names and args.sessions is None:
+        try:
+            names = accounts.pick(console, DATA / "profiles") if sys.stdin.isatty() else ["session-1"]
+        except (KeyboardInterrupt, EOFError):
+            store.close()
+            return 0
+    names, profile_locks = claim_profiles(names, args.sessions or 1)
     if names is None:
-        console.print(f"[red]Profile {profile_locks!r} is already in use by another running vocabbot.[/] "
-                      "Pick a different -p name.")
+        console.print(f"[red]Account {profile_locks!r} is already in use by another running vocabbot.[/] "
+                      "Pick a different one.")
         store.close()
         return 1
     stop = threading.Event()

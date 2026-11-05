@@ -6,7 +6,7 @@ Answers Vocabulary.com assignment questions in Chrome using an answer cache firs
 
 - **Multiple sessions**: each session gets its own Chrome window and profile, so you can run several assignments or accounts side by side
 - **Shared answer cache** (SQLite): an answer learned in one session is reused by all of them, and by later runs
-- **Persistent logins**: each session's Chrome profile lives in `data/profiles/<name>`, so you sign in once
+- **Saved accounts**: each account is its own Chrome profile in `data/profiles/<name>`, so you sign in once and pick accounts from a list at start
 - Handles multiple-choice, sentence-context, image and spelling questions, countdown blockers, achievements and round screens
 - Reloads the page when a question gets stuck
 - Live terminal dashboard with per-session and all-time stats
@@ -29,17 +29,30 @@ Put your key in `config.json` (or leave it blank and set `OPENAI_API_KEY`). `con
 ## Usage
 
 ```bash
-python main.py            # one session
-python main.py -n 3       # three sessions: session-1, session-2, session-3
-python main.py -p alice -p bob   # named sessions, e.g. one per account
+python main.py                   # choose accounts from a list (or add new ones)
+python main.py -a alice -a bob   # run these accounts without the list
+python main.py -n 3              # three sessions named session-1..3
 ```
 
-1. A Chrome window opens per session.
-2. In each window, sign in and open an assignment. A session starts answering as soon as a question is on screen; no need to press anything.
+With no flags you get the account picker:
+
+```
+  #   Account   Last used
+  1   alice     2026-11-05 10:47
+  2   bob       2026-11-04 18:20
+Accounts (1): 1, carol
+```
+
+Type numbers or names, separated by commas, or `all`. A name that isn't in the list becomes a new account. Each account you pick gets its own session and window.
+
+1. A Chrome window opens per account.
+2. Sign in the first time you use an account; after that it opens already signed in. Then open an assignment. A session starts answering as soon as a question is on screen; no need to press anything.
 3. When an assignment finishes, open another one in that window and it carries on.
 4. Ctrl+C stops every session and closes only the bot's Chrome windows.
 
 Closing a window ends just that session. Logs go to `logs/vocabbot.log`.
+
+An account is just a folder: rename `data/profiles/<old>` to change its name, delete the folder to forget it (and its login). An account can only run in one place at a time; if another `main.py` is using it, the picker marks it "running elsewhere".
 
 ## Configuration (`config.json`)
 
@@ -56,7 +69,7 @@ Closing a window ends just that session. Logs go to `logs/vocabbot.log`.
 | Path | Contents |
 |---|---|
 | `data/vocabbot.db` | Answer cache and all-time counters (SQLite) |
-| `data/profiles/<name>/` | Chrome profile per session (holds your login) |
+| `data/profiles/<name>/` | Chrome profile per account (holds its login) |
 | `logs/vocabbot.log` | Rotating log |
 
 On first run, an existing `question_cache.json` and `statistics.json` are imported into the database once.
