@@ -1,0 +1,98 @@
+# Builds standalone vocabbot executables for Windows and macOS.
+# - Push a tag like v2.0.0 (must match vocabbot.__version__) -> builds and publishes a GitHub Release.
+# - Run manually (Actions tab -> Release -> Run workflow) -> builds only; download from the run's artifacts.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            asset: vocabbot-windows-x64
+            exe: vocabbot.exe
+          - os: macos-latest          # Apple Silicon
+            asset: vocabbot-macos-arm64
+            exe: vocabbot
+          - os: macos-15-intel        # Intel Macs (macos-13 was retired Dec 2025)
+            asset: vocabbot-macos-x64
+            exe: vocabbot
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pinned dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller pytest -c constraints.txt
+
+      - name: Check tag matches version
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          v=$(python -c "import vocabbot; print(vocabbot.__version__)")
+          if [ "v$v" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match vocabbot.__version__ ($v)"; exit 1
+          fi
+
+      - name: Test
+        run: pytest -q
+
+      - name: Build
+        run: pyinstaller --onefile --name vocabbot --noconfirm main.py
+
+      - name: Smoke test
+        shell: bash
+        run: |
+          ./dist/${{ matrix.exe }} --version
+          ./dist/${{ matrix.exe }} --help > /dev/null
+
+      - name: Package
+        shell: bash
+        run: |
+          cd dist
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            7z a "../${{ matrix.asset }}.zip" "${{ matrix.exe }}"
+          else
+            zip -9 "../${{ matrix.asset }}.zip" "${{ matrix.exe }}"   # zip keeps the executable bit
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}.zip
+          if-no-files-found: error
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" assets/*.zip \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "vocabbot $GITHUB_REF_NAME" \
+            --generate-notes

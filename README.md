@@ -11,13 +11,37 @@ Answers Vocabulary.com assignment questions in Chrome using an answer cache firs
 - Reloads the page when a question gets stuck
 - Live terminal dashboard with per-session and all-time stats
 
-## Requirements
+## Download (no Python needed)
+
+Grab the zip for your computer from the [latest release](https://github.com/jackh54/vocabcom-Semi-Auto-Answer/releases/latest), unzip it, and run `vocabbot`:
+
+| Computer | File |
+|---|---|
+| Windows | `vocabbot-windows-x64.zip` → double-click `vocabbot.exe` |
+| Mac with Apple Silicon (M1 and later) | `vocabbot-macos-arm64.zip` |
+| Intel Mac | `vocabbot-macos-x64.zip` |
+
+You need Google Chrome installed. On first run it asks for your OpenAI API key and saves it.
+
+It shows the same account menu and dashboard as the source version, and takes the same flags (`vocabbot -a alice`, `vocabbot.exe -n 2`).
+
+The builds aren't code-signed, so the OS warns the first time:
+- **Windows:** SmartScreen says "Windows protected your PC" → **More info** → **Run anyway**.
+- **Mac:** double-click shows "cannot be verified". Open **System Settings → Privacy & Security** and click **Open Anyway**, or run `xattr -d com.apple.quarantine vocabbot` in Terminal from the unzipped folder, then `./vocabbot`.
+
+The packaged app keeps its config, saved accounts and logs in your user folder, so updating is just replacing the file:
+- Mac: `~/Library/Application Support/vocabbot`
+- Windows: `%LOCALAPPDATA%\vocabbot`
+
+## Run from source
+
+### Requirements
 
 - Python 3.10+
 - Google Chrome
 - An OpenAI API key
 
-## Setup
+### Setup
 
 ```bash
 pip install -r requirements.txt
@@ -26,7 +50,7 @@ cp config.example.json config.json
 
 Put your key in `config.json` (or leave it blank and set `OPENAI_API_KEY`). `config.json` is gitignored.
 
-## Usage
+### Usage
 
 ```bash
 python main.py                   # choose accounts from a list (or add new ones)
@@ -54,7 +78,7 @@ Closing a window ends just that session. Logs go to `logs/vocabbot.log`.
 
 An account is just a folder: rename `data/profiles/<old>` to change its name, delete the folder to forget it (and its login). An account can only run in one place at a time; if another `main.py` is using it, the picker marks it "running elsewhere".
 
-## Configuration (`config.json`)
+### Configuration (`config.json`)
 
 | Key | Default | What it does |
 |---|---|---|
@@ -79,6 +103,19 @@ On first run, an existing `question_cache.json` and `statistics.json` are import
 ```bash
 python -m pytest
 ```
+
+When running from source, data lives in the repo folder (`config.json`, `data/`, `logs/`). Set `VOCABBOT_HOME` to use another folder.
+
+### Releases
+
+`.github/workflows/release.yml` builds Windows, Apple Silicon and Intel Mac executables with PyInstaller, smoke-tests each one, and attaches the zips to a GitHub Release.
+
+1. Bump `__version__` in `vocabbot/__init__.py`.
+2. Commit, then tag and push: `git tag v2.0.1 && git push origin v2.0.1`.
+
+The build fails if the tag doesn't match `__version__`. Builds use the exact versions in `constraints.txt`. Running the workflow by hand from the Actions tab builds without publishing.
+
+Local build: `pip install -r requirements.txt pyinstaller -c constraints.txt && pyinstaller --onefile --name vocabbot main.py` (output in `dist/`).
 
 ## Notes
 

@@ -13,6 +13,10 @@ class ConfigError(Exception):
     pass
 
 
+class MissingKeyError(ConfigError):
+    pass
+
+
 @dataclass(frozen=True)
 class Config:
     openai_api_key: str
@@ -35,6 +39,25 @@ def _chrome_args(options: dict) -> tuple[str, ...]:
     return tuple(args)
 
 
+def write_initial_config(path: Path, api_key: str) -> None:
+    """Create config.json with defaults (or set the key in an existing one). Owner-only permissions."""
+    raw: dict = {}
+    if path.exists():
+        try:
+            raw = json.loads(path.read_text())
+        except json.JSONDecodeError:
+            raw = {}
+    defaults = {"model": DEFAULT_MODEL, "chrome_options": {"disable_gpu": True, "window_size": "1280,900"},
+                "log_level": "INFO", "min_wait_time": 3, "max_wait_time": 5}
+    raw = {**defaults, **raw, "openai_api_key": api_key}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(raw, indent=2) + "\n")
+    try:
+        path.chmod(0o600)
+    except OSError:
+        pass  # e.g. Windows ACLs; the file is in the user's own profile anyway
+
+
 def load_config(path: Path) -> Config:
     raw: dict = {}
     if path.exists():
@@ -45,7 +68,7 @@ def load_config(path: Path) -> Config:
 
     api_key = raw.get("openai_api_key") or os.environ.get("OPENAI_API_KEY", "")
     if not api_key:
-        raise ConfigError(
+        raise MissingKeyError(
             f"No OpenAI API key. Set openai_api_key in {path.name} or the OPENAI_API_KEY environment variable."
         )
 

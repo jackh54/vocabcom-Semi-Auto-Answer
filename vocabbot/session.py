@@ -335,9 +335,9 @@ class Session:
             remaining = [i for i in range(n) if i not in tried]
             index = remaining[0] if len(remaining) == 1 else self._ask_ai(q, tried)
             if index is None or index in tried:
-                why = "no usable AI answer" if index is None else "AI repeated a wrong choice"
+                why = "No usable AI answer" if index is None else "AI repeated a wrong choice"
                 index = remaining[0]
-                self.log.info("%s, trying choice %d", why.capitalize(), index + 1)
+                self.log.info("%s, trying choice %d", why, index + 1)
 
             result = self._try(q, index)
             if result == NOT_CLICKED:
