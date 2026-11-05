@@ -8,10 +8,8 @@
 from __future__ import annotations
 
 import argparse
-import logging
 import sys
 import threading
-from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 import openai
@@ -22,6 +20,7 @@ from vocabbot import __version__, accounts, browser, dashboard
 from vocabbot.accounts import valid_name
 from vocabbot.answerer import Answerer
 from vocabbot.config import ConfigError, MissingKeyError, load_config, write_initial_config
+from vocabbot.logfile import setup_logging
 from vocabbot.paths import app_home, is_frozen
 from vocabbot.session import Session
 from vocabbot.store import Store
@@ -49,17 +48,6 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     if bad:
         parser.error(f"invalid account name {bad[0]!r}: use letters, numbers, - _ . (not only digits)")
     return args
-
-
-def setup_logging(level: str) -> None:
-    LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
-    handler = RotatingFileHandler(LOG_FILE, maxBytes=2_000_000, backupCount=3, encoding="utf-8")
-    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)-7s %(name)s: %(message)s"))
-    root = logging.getLogger()
-    root.addHandler(handler)
-    root.setLevel(getattr(logging, level, logging.INFO))
-    for noisy in ("urllib3", "selenium", "httpx", "httpcore", "openai", "undetected_chromedriver"):
-        logging.getLogger(noisy).setLevel(logging.WARNING)
 
 
 def claim_profiles(names: list[str] | None, count: int):
@@ -124,7 +112,7 @@ def main(argv: list[str]) -> int:
     except ConfigError as e:
         console.print(f"[red]Config error:[/] {e}")
         return 1
-    setup_logging(config.log_level)
+    setup_logging(LOG_FILE, config.log_level)
 
     answerer = Answerer(config.openai_api_key, config.model)
     for attempt in range(3):

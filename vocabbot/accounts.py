@@ -32,8 +32,9 @@ def valid_name(name: str) -> bool:
     return bool(_NAME.match(name)) and not name.isdigit()
 
 
-def list_accounts(profiles: Path) -> list[Account]:
-    """Saved accounts, most recently used first."""
+def list_accounts(profiles: Path, skip: set[str] | frozenset[str] = frozenset()) -> list[Account]:
+    """Saved accounts, most recently used first. Profiles named in `skip` (already running in
+    this process) aren't lock-probed."""
     if not profiles.is_dir():
         return []
     accounts = []
@@ -42,6 +43,9 @@ def list_accounts(profiles: Path) -> list[Account]:
             continue
         marker = d / "Local State"  # Chrome rewrites this every run
         last_used = datetime.fromtimestamp((marker if marker.exists() else d).stat().st_mtime)
+        if d.name in skip:
+            accounts.append(Account(d.name, last_used, in_use=True))
+            continue
         lock = browser.lock_profile(d)
         if lock is not None:
             lock.close()

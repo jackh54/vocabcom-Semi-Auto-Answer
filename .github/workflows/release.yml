@@ -1,4 +1,4 @@
-# Builds standalone vocabbot executables for Windows and macOS.
+# Builds the vocabbot desktop app: vocabbot.app for macOS (Apple Silicon and Intel), vocabbot.exe for Windows.
 # - Push a tag like v2.0.0 (must match vocabbot.__version__) -> builds and publishes a GitHub Release.
 # - Run manually (Actions tab -> Release -> Run workflow) -> builds only; download from the run's artifacts.
 name: Release
@@ -19,13 +19,13 @@ jobs:
         include:
           - os: windows-latest
             asset: vocabbot-windows-x64
-            exe: vocabbot.exe
+            bin: dist/vocabbot.exe
           - os: macos-latest          # Apple Silicon
-            asset: vocabbot-macos-arm64
-            exe: vocabbot
+            asset: vocabbot-macos-apple-silicon
+            bin: dist/vocabbot.app/Contents/MacOS/vocabbot
           - os: macos-15-intel        # Intel Macs (macos-13 was retired Dec 2025)
-            asset: vocabbot-macos-x64
-            exe: vocabbot
+            asset: vocabbot-macos-intel
+            bin: dist/vocabbot.app/Contents/MacOS/vocabbot
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -52,22 +52,24 @@ jobs:
         run: pytest -q
 
       - name: Build
-        run: pyinstaller --onefile --name vocabbot --noconfirm main.py
+        run: pyinstaller packaging/vocabbot.spec --noconfirm
 
-      - name: Smoke test
+      - name: Self-test the packaged app
         shell: bash
         run: |
-          ./dist/${{ matrix.exe }} --version
-          ./dist/${{ matrix.exe }} --help > /dev/null
+          # Loads every module the app needs without opening a window (the Windows build has no console).
+          "./${{ matrix.bin }}" --self-test selftest.txt || true
+          cat selftest.txt
+          grep -q "^ok " selftest.txt
 
       - name: Package
         shell: bash
         run: |
-          cd dist
           if [ "$RUNNER_OS" = "Windows" ]; then
-            7z a "../${{ matrix.asset }}.zip" "${{ matrix.exe }}"
+            7z a "${{ matrix.asset }}.zip" ./dist/vocabbot.exe
           else
-            zip -9 "../${{ matrix.asset }}.zip" "${{ matrix.exe }}"   # zip keeps the executable bit
+            # ditto keeps the .app bundle intact (symlinks, permissions, signature)
+            ditto -c -k --sequesterRsrc --keepParent dist/vocabbot.app "${{ matrix.asset }}.zip"
           fi
 
       - uses: actions/upload-artifact@v4

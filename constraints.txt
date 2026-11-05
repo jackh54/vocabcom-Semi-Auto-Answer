@@ -35,3 +35,13 @@ urllib3==2.4.0
 websockets==16.0
 wsproto==1.2.0
 pyinstaller==6.22.3
+# Desktop window (pywebview). macOS pulls pyobjc; Windows pulls pythonnet (versions resolved on that runner).
+bottle==0.13.4
+proxy_tools==0.1.0
+pyobjc-core==13.0
+pyobjc-framework-Cocoa==13.0
+pyobjc-framework-Quartz==13.0
+pyobjc-framework-Security==13.0
+pyobjc-framework-UniformTypeIdentifiers==13.0
+pyobjc-framework-WebKit==13.0
+pywebview==6.2.1

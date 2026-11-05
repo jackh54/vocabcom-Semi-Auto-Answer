@@ -1,0 +1,629 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>vocabbot</title>
+<style>
+:root {
+  --paper: #f3f5f8;
+  --surface: #ffffff;
+  --ink: #18202c;
+  --muted: #5e6878;
+  --rule: #dde2e9;
+  --highlight: #ffe25a;
+  --mark: #ffe25a;            /* highlighter behind headwords */
+  --on-highlight: #18202c;
+  --right: #1e8e5a;
+  --wrong: #c8423b;
+  --wait: #a67c00;
+  --shadow: 0 1px 2px rgb(24 32 44 / 6%), 0 4px 16px rgb(24 32 44 / 5%);
+  --serif: "New York", ui-serif, "Iowan Old Style", Charter, Cambria, Georgia, serif;
+  --sans: system-ui, -apple-system, "Segoe UI Variable Text", "Segoe UI", Roboto, sans-serif;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #141922;
+    --surface: #1c222d;
+    --ink: #e8ecf2;
+    --muted: #9aa4b2;
+    --rule: #2b3341;
+    --highlight: #e6c63a;
+    --mark: rgb(230 198 58 / 34%);  /* translucent so light text stays readable */
+    --on-highlight: #141922;
+    --right: #45c48e;
+    --wrong: #f07068;
+    --wait: #e6c63a;
+    --shadow: 0 1px 2px rgb(0 0 0 / 30%);
+    color-scheme: dark;
+  }
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font: 14px/1.45 var(--sans);
+  font-variant-numeric: tabular-nums;
+  -webkit-font-smoothing: antialiased;
+}
+button, input { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; border-radius: 6px; }
+[hidden] { display: none !important; }
+
+/* ---- buttons ---- */
+.btn {
+  border: 1px solid var(--rule);
+  background: var(--surface);
+  border-radius: 8px;
+  padding: 6px 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.btn:hover { border-color: var(--muted); }
+.btn:disabled { opacity: .45; cursor: default; border-color: var(--rule); }
+.btn.primary { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.btn.primary:hover { opacity: .9; }
+.btn.quiet { border-color: transparent; background: transparent; color: var(--muted); }
+.btn.quiet:hover { color: var(--ink); background: color-mix(in srgb, var(--rule) 55%, transparent); }
+.btn.danger { color: var(--wrong); }
+
+/* ---- the one bold element: a highlighted headword ---- */
+.hl {
+  background-image: linear-gradient(var(--mark), var(--mark));
+  background-repeat: no-repeat;
+  background-size: 100% 42%;
+  background-position: 0 88%;
+  padding: 0 .08em;
+  color: inherit;
+}
+.hl.swipe { animation: swipe .45s cubic-bezier(.2,.7,.2,1); }
+@keyframes swipe { from { background-size: 0% 42%; } to { background-size: 100% 42%; } }
+@media (prefers-reduced-motion: reduce) { .hl.swipe { animation: none; } }
+
+/* ---- layout ---- */
+.app { display: grid; grid-template-columns: 290px 1fr; height: 100vh; }
+.sidebar {
+  border-right: 1px solid var(--rule);
+  display: flex; flex-direction: column;
+  min-height: 0;
+  padding: 22px 16px 16px;
+  background: color-mix(in srgb, var(--surface) 55%, var(--paper));
+}
+.brand { font-family: var(--serif); font-size: 26px; font-weight: 600; letter-spacing: -.01em; margin: 0 6px 2px; }
+.brand-sub { color: var(--muted); margin: 0 6px 22px; font-size: 13px; }
+.side-head { display: flex; align-items: baseline; justify-content: space-between; margin: 0 6px 8px; }
+.side-head h2 { font-size: 15px; margin: 0; font-weight: 600; }
+.accounts { list-style: none; margin: 0; padding: 0; overflow-y: auto; flex: 1; min-height: 0; }
+.acct {
+  display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; align-items: center;
+  padding: 9px 8px 9px 10px; border-radius: 10px;
+}
+.acct + .acct { margin-top: 2px; }
+.acct:hover { background: color-mix(in srgb, var(--rule) 45%, transparent); }
+.acct-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.acct-name.unknown { font-weight: 500; color: var(--muted); }
+.acct-meta { grid-column: 1; color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.acct-actions { grid-row: 1 / span 2; grid-column: 2; display: flex; gap: 0; align-items: center; }
+.icon-btn { width: 28px; padding: 6px 0; text-align: center; font-size: 13px; line-height: 1; }
+.dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--right); margin-right: 6px; vertical-align: 1px; }
+.side-foot { display: grid; gap: 8px; padding-top: 12px; border-top: 1px solid var(--rule); margin-top: 10px; min-width: 0; }
+.add-row { display: flex; gap: 6px; min-width: 0; }
+.add-row input {
+  flex: 1 1 0; width: 0; min-width: 0; padding: 6px 10px; border-radius: 8px;
+  border: 1px solid var(--rule); background: var(--surface);
+}
+.side-empty { color: var(--muted); margin: 4px 6px 12px; font-size: 13px; }
+
+.main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.topbar {
+  display: flex; align-items: center; gap: 28px;
+  padding: 18px 28px; border-bottom: 1px solid var(--rule);
+}
+.totals { display: flex; gap: 28px; flex-wrap: wrap; flex: 1; }
+.total b { display: block; font-size: 20px; font-weight: 600; line-height: 1.15; }
+.total span { color: var(--muted); font-size: 12px; }
+.total.right b { color: var(--right); }
+.total.wrong b { color: var(--wrong); }
+
+.content { flex: 1; overflow-y: auto; padding: 24px 28px 28px; min-height: 0; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 16px; }
+
+/* ---- session panel ---- */
+.panel {
+  background: var(--surface); border: 1px solid var(--rule); border-radius: 14px;
+  box-shadow: var(--shadow); padding: 16px 18px 14px; display: flex; flex-direction: column; min-height: 248px;
+}
+.panel.ended { box-shadow: none; background: transparent; }
+.p-head { display: flex; align-items: center; gap: 10px; }
+.p-title { font-weight: 600; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.p-title small { color: var(--muted); font-weight: 400; font-size: 13px; margin-left: 4px; }
+.state {
+  font-size: 12px; font-weight: 600; padding: 2px 9px; border-radius: 999px;
+  border: 1px solid currentColor; color: var(--muted); white-space: nowrap;
+}
+.state.answering { color: var(--right); }
+.state.waiting, .state.blocked { color: var(--wait); }
+.state.done { color: var(--on-highlight); background: var(--highlight); border-color: var(--highlight); }
+.state.error, .state.closed { color: var(--wrong); }
+.word { font-family: var(--serif); font-size: 34px; font-weight: 600; letter-spacing: -.012em; line-height: 1.1; margin: 22px 0 6px; overflow-wrap: anywhere; }
+.word.long { font-size: 19px; font-weight: 500; line-height: 1.35; letter-spacing: 0; }
+.prompt { color: var(--muted); min-height: 2.9em; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.msg { font-family: var(--serif); font-size: 19px; line-height: 1.35; margin: 22px 0 6px; }
+.stats { display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; margin-top: auto; padding-top: 14px; border-top: 1px solid var(--rule); }
+.stat b { display: block; font-size: 17px; font-weight: 600; }
+.stat span { color: var(--muted); font-size: 12px; }
+.stat.right b { color: var(--right); }
+.stat.wrong b { color: var(--wrong); }
+.p-foot { display: flex; align-items: center; justify-content: space-between; margin-top: 10px; color: var(--muted); font-size: 12px; }
+
+.empty { max-width: 460px; margin: 10vh auto 0; text-align: center; }
+.empty h2 { font-family: var(--serif); font-size: 26px; font-weight: 600; margin: 0 0 10px; }
+.empty p { color: var(--muted); margin: 0 0 18px; }
+
+/* ---- activity ---- */
+.activity { margin-top: 28px; }
+.activity h2 { font-size: 15px; margin: 0 0 8px; font-weight: 600; }
+.feed { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--rule); }
+.feed li { display: grid; grid-template-columns: 96px 150px 18px 1fr; gap: 8px; padding: 7px 0; border-bottom: 1px solid var(--rule); align-items: baseline; }
+.feed time, .feed .who { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.feed .mark { font-weight: 700; text-align: center; }
+.feed .mark.right { color: var(--right); }
+.feed .mark.wrong { color: var(--wrong); }
+.feed .what { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.feed li.feed-empty { display: block; color: var(--muted); padding: 10px 0; }
+
+/* ---- dialogs ---- */
+dialog {
+  border: 1px solid var(--rule); border-radius: 16px; padding: 24px; width: min(460px, calc(100vw - 32px));
+  background: var(--surface); color: var(--ink); box-shadow: 0 20px 60px rgb(0 0 0 / 25%);
+}
+dialog::backdrop { background: rgb(20 25 34 / 40%); }
+dialog h2 { font-family: var(--serif); font-size: 22px; margin: 0 0 6px; font-weight: 600; }
+dialog p.lead { color: var(--muted); margin: 0 0 18px; }
+.field { display: grid; gap: 5px; margin-bottom: 14px; }
+.field label { font-weight: 600; font-size: 13px; }
+.field .hint { color: var(--muted); font-size: 12px; }
+.field input { padding: 8px 10px; border-radius: 8px; border: 1px solid var(--rule); background: var(--paper); }
+.pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.row-end { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+.note { color: var(--muted); font-size: 12px; margin: -6px 0 0; }
+.error { color: var(--wrong); min-height: 1.4em; margin: 4px 0 0; font-size: 13px; }
+.sep { border: 0; border-top: 1px solid var(--rule); margin: 18px 0; }
+.links { display: flex; gap: 8px; flex-wrap: wrap; }
+.path { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; margin: 0 0 8px; }
+
+/* ---- first run ---- */
+.setup { min-height: 100vh; display: grid; place-items: center; padding: 24px; }
+.setup-card { width: min(480px, 100%); }
+.setup-card .brand { font-size: 40px; margin: 0 0 6px; }
+.setup-card .lead { color: var(--muted); margin: 0 0 26px; font-size: 15px; }
+
+.toast {
+  position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%);
+  background: var(--ink); color: var(--paper); padding: 9px 16px; border-radius: 10px; font-size: 13px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 20%); max-width: calc(100vw - 48px);
+}
+
+@media (max-width: 760px) {
+  .app { grid-template-columns: 1fr; height: auto; }
+  .sidebar { border-right: 0; border-bottom: 1px solid var(--rule); }
+  .accounts { max-height: 260px; }
+  .grid { grid-template-columns: 1fr; }
+  .feed li { grid-template-columns: 56px 1fr 18px; }
+  .feed .what { grid-column: 1 / -1; }
+}
+</style>
+</head>
+<body>
+
+<!-- First run: no API key yet -->
+<section class="setup" id="setup" hidden>
+  <form class="setup-card" id="setup-form">
+    <h1 class="brand"><span class="hl">vocabbot</span></h1>
+    <p class="lead">Answers your Vocabulary.com assignments in Chrome, one window per account. To start, add an OpenAI API key; it's used when a question isn't in the answer cache yet.</p>
+    <div class="field">
+      <label for="setup-key">OpenAI API key</label>
+      <input id="setup-key" type="password" autocomplete="off" spellcheck="false" placeholder="sk-…">
+      <span class="hint">Checked with OpenAI, then saved on this computer only. <a href="#" data-open="https://platform.openai.com/api-keys">Get a key</a></span>
+    </div>
+    <p class="error" id="setup-error"></p>
+    <div class="row-end"><button class="btn primary" type="submit" id="setup-save">Check and save key</button></div>
+  </form>
+</section>
+
+<!-- Main app -->
+<div class="app" id="app" hidden>
+  <aside class="sidebar">
+    <h1 class="brand"><span class="hl">vocabbot</span></h1>
+    <p class="brand-sub" id="version"></p>
+    <div class="side-head"><h2>Accounts</h2><button class="btn quiet" id="start-all" hidden>Start all</button></div>
+    <p class="side-empty" id="no-accounts" hidden>No accounts yet. Add one below; you'll sign in to Vocabulary.com in its window, once.</p>
+    <ul class="accounts" id="accounts"></ul>
+    <div class="side-foot">
+      <form class="add-row" id="add-form">
+        <input id="add-name" aria-label="New account name" spellcheck="false" maxlength="40">
+        <button class="btn primary" type="submit">Add account</button>
+      </form>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <div class="totals" id="totals" aria-label="All-time totals"></div>
+      <button class="btn" id="open-settings">Settings</button>
+    </header>
+    <div class="content">
+      <div class="empty" id="empty">
+        <h2>Nothing running</h2>
+        <p>Start an account on the left. Its Chrome window opens on Vocabulary.com; sign in if asked, open an assignment, and it starts answering on its own.</p>
+      </div>
+      <div class="grid" id="panels"></div>
+      <section class="activity">
+        <h2>Activity</h2>
+        <ul class="feed" id="feed"></ul>
+      </section>
+    </div>
+  </main>
+</div>
+
+<!-- Settings -->
+<dialog id="settings">
+  <form id="settings-form">
+    <h2>Settings</h2>
+    <p class="lead">Changes apply to accounts you start after saving.</p>
+    <div class="field">
+      <label for="s-model">OpenAI model</label>
+      <input id="s-model" spellcheck="false">
+    </div>
+    <div class="pair">
+      <div class="field">
+        <label for="s-min">Shortest gap</label>
+        <input id="s-min" type="number" min="0" max="120" step="0.5">
+      </div>
+      <div class="field">
+        <label for="s-max">Longest gap</label>
+        <input id="s-max" type="number" min="0" max="120" step="0.5">
+      </div>
+    </div>
+    <p class="note">Seconds between answers. Each answer waits a random time in this range.</p>
+    <p class="error" id="settings-error"></p>
+    <div class="row-end">
+      <button class="btn" type="button" id="settings-close">Close</button>
+      <button class="btn primary" type="submit" id="settings-save">Save settings</button>
+    </div>
+    <hr class="sep">
+    <div class="field">
+      <label for="s-key">OpenAI API key</label>
+      <span class="hint" id="s-key-hint"></span>
+      <div class="add-row"><input id="s-key" type="password" autocomplete="off" spellcheck="false" placeholder="Paste a new key to replace it"><button class="btn" type="button" id="s-key-save">Replace key</button></div>
+    </div>
+    <hr class="sep">
+    <p class="path" id="s-home"></p>
+    <div class="links">
+      <button class="btn" type="button" data-folder="data">Open data folder</button>
+      <button class="btn" type="button" data-folder="logs">Open log folder</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- Confirm -->
+<dialog id="confirm">
+  <form method="dialog">
+    <h2 id="confirm-title"></h2>
+    <p class="lead" id="confirm-text"></p>
+    <div class="row-end">
+      <button class="btn" value="no">Cancel</button>
+      <button class="btn primary" value="yes" id="confirm-yes"></button>
+    </div>
+  </form>
+</dialog>
+
+<div class="toast" id="toast" role="status" hidden></div>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+
+/* ---------- bridge: pywebview in the app, sample data in a plain browser ---------- */
+let api = null;
+function useMock() {
+  const t0 = Date.now();
+  const words = ["pernicious", "obdurate", "sagacity", "redress", "chattel", "lacerate", "abhorrence"];
+  let n = 0, events = [], accounts = [
+    { name: "account-1", display_name: "Jordan Lee", last_used: Date.now() / 1000 - 3600, running: true, elsewhere: false },
+    { name: "account-2", display_name: "Sam Rivera", last_used: Date.now() / 1000 - 86400, running: true, elsewhere: false },
+    { name: "account-3", display_name: "", last_used: Date.now() / 1000 - 86400 * 9, running: false, elsewhere: false },
+  ];
+  let hasKey = !location.hash.includes("setup");
+  const sessions = () => accounts.filter(a => a.running).map((a, i) => {
+    const s = Math.floor((Date.now() - t0) / 1000) + 600 * (i + 1);
+    const w = words[(Math.floor(s / 4) + i * 3) % words.length];
+    return { name: a.name, account: a.display_name, state: i === 1 && s % 40 > 30 ? "done" : "answering",
+      detail: i === 1 && s % 40 > 30 ? "Assignment complete - open another one in this window" : `${w} has the same or almost the same meaning as:`,
+      correct: 40 + Math.floor(s / 5), wrong: 2 + (i % 2), cache_hits: 18 + Math.floor(s / 9), ai_calls: 25 + Math.floor(s / 7), done: i,
+      seconds: s, alive: true, stopping: false };
+  });
+  setInterval(() => { n++; const s = sessions(); if (!s.length) return;
+    const pick = s[n % s.length];
+    events.push({ id: n, time: Date.now() / 1000, session: pick.name, level: "info", text: `Picked '${words[n % words.length]}': ${n % 9 ? "right" : "wrong"}` }); }, 1600);
+  const ok = (v) => Promise.resolve(v);
+  api = {
+    boot: () => ok({ settings: { has_key: hasKey, key_hint: "…x9Qa", model: "gpt-4o-mini", min_wait: 3, max_wait: 5, home: "~/Library/Application Support/vocabbot", version: "2.1.0" } }),
+    poll: (since) => ok({ sessions: sessions(), accounts, events: events.filter(e => e.id > since),
+      totals: { correct_answers: 312, wrong_answers: 4, achievements: 7, cache_hits: 160, cache_misses: 107, answers_cached: 104, hit_rate: 60 } }),
+    start: (name) => { let a = accounts.find(x => x.name === name); if (!a) { a = { name, display_name: "", last_used: null, running: false, elsewhere: false }; accounts.push(a); } a.running = true; return ok(null); },
+    stop: (name) => { accounts.find(x => x.name === name).running = false; return ok(null); },
+    stop_all: () => { accounts.forEach(a => a.running = false); return ok(null); },
+    dismiss: () => ok(null), forget: (name) => { accounts = accounts.filter(a => a.name !== name); return ok(null); },
+    new_account_name: () => ok(`account-${accounts.length + 1}`),
+    set_api_key: (k) => { if (!k.startsWith("sk-")) return ok("OpenAI rejected that key. Check it at platform.openai.com/api-keys."); hasKey = true; return ok(null); },
+    save_settings: () => ok(null), open_folder: () => ok(null), open_url: (u) => { window.open(u); return ok(null); },
+  };
+}
+// The desktop app marks the page with <meta name="vocabbot-host" content="desktop"> and must always
+// wait for the real bridge, however slowly it starts. Only a plain browser preview uses sample data.
+const IN_APP = !!document.querySelector('meta[name="vocabbot-host"][content="desktop"]');
+function whenReady(fn) {
+  if (window.pywebview && window.pywebview.api) { api = window.pywebview.api; return fn(); }
+  let done = false;
+  window.addEventListener("pywebviewready", () => { if (done) return; done = true; api = window.pywebview.api; fn(); });
+  if (!IN_APP) setTimeout(() => { if (done) return; done = true; useMock(); fn(); }, 1200);
+}
+
+/* ---------- helpers ---------- */
+function toast(msg) {
+  const t = $("toast"); t.textContent = msg; t.hidden = false;
+  clearTimeout(toast.timer); toast.timer = setTimeout(() => { t.hidden = true; }, 3600);
+}
+async function act(promise) {
+  try { const err = await promise; if (err) toast(err); return err; }
+  catch (e) { toast(String(e && e.message || e)); return String(e); }
+}
+function ago(ts) {
+  if (!ts) return "never used";
+  const s = Date.now() / 1000 - ts;
+  if (s < 90) return "used just now";
+  if (s < 3600) return `used ${Math.round(s / 60)} min ago`;
+  if (s < 86400) return `used ${Math.round(s / 3600)} h ago`;
+  const d = Math.round(s / 86400);
+  return d === 1 ? "used yesterday" : `used ${d} days ago`;
+}
+function clock(sec) {
+  const h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60), s = sec % 60;
+  return (h ? `${h}:${String(m).padStart(2, "0")}` : `${m}`) + `:${String(s).padStart(2, "0")}`;
+}
+function ask(title, text, yes) {
+  return new Promise((resolve) => {
+    const d = $("confirm");
+    $("confirm-title").textContent = title; $("confirm-text").textContent = text; $("confirm-yes").textContent = yes;
+    d.returnValue = ""; d.showModal();
+    d.addEventListener("close", () => resolve(d.returnValue === "yes"), { once: true });
+  });
+}
+const STATE_LABEL = { answering: "Answering", waiting: "Waiting", done: "Done", blocked: "Paused", reloading: "Reloading",
+  launching: "Opening Chrome", starting: "Opening Chrome", error: "Error", closed: "Window closed", stopped: "Stopped" };
+const WAITING_TEXT = {
+  "Sign in and open an assignment in this window": "Sign in if asked, then open an assignment in its Chrome window.",
+};
+
+// Pull the word being asked about out of the question text, for the headword.
+function headword(detail) {
+  const [ask, ...rest] = detail.split("  Context: ");
+  const context = rest.join(" ").trim();
+  let m = ask.match(/^In this sentence,\s+([A-Za-z'’-]+)\s+means/i)
+       || ask.match(/^([A-Za-z'’-]+)\s+(means|has the same|has the opposite|is the opposite|is most similar|is closest)/i);
+  if (m) return { word: m[1], prompt: context || ask.slice(m[1].length).trim() };
+  m = detail.match(/^Spelling:\s+(.+)$/);
+  if (m) return { word: m[1], prompt: "Spelling the word it hears" };
+  const text = (context || ask).trim();
+  return { word: text, prompt: context && ask.trim() ? ask.trim() : "", long: true };
+}
+
+/* ---------- rendering ---------- */
+let settings = {}, lastEvent = 0, feedItems = [];
+const panels = new Map();
+const accountLabel = new Map();
+
+function renderTotals(t) {
+  const items = [
+    ["right", t.correct_answers, "right, all time"],
+    ["wrong", t.wrong_answers, "wrong"],
+    ["", t.answers_cached, "answers saved"],
+    ["", t.hit_rate == null ? "–" : `${t.hit_rate}%`, "answered from saved"],
+    ["", t.achievements, "achievements"],
+  ];
+  const box = $("totals"); box.replaceChildren();
+  for (const [cls, value, label] of items) {
+    const d = el("div", `total ${cls}`); d.append(el("b", "", String(value)), el("span", "", label)); box.append(d);
+  }
+}
+
+let accountsKey = "";
+function renderAccounts(accounts) {
+  // Rebuild only when something visible changed, so a click isn't lost to a rebuild mid-press.
+  const key = JSON.stringify(accounts.map(a => [a.name, a.display_name, a.running, a.elsewhere, ago(a.last_used)]));
+  if (key === accountsKey) return;
+  accountsKey = key;
+  const ul = $("accounts"); ul.replaceChildren();
+  $("no-accounts").hidden = accounts.length > 0;
+  const idle = accounts.filter(a => !a.running && !a.elsewhere);
+  $("start-all").hidden = idle.length < 2;
+  for (const a of accounts) {
+    accountLabel.set(a.name, a.display_name || a.name);
+    const li = el("li", "acct");
+    const name = el("div", "acct-name" + (a.display_name ? "" : " unknown"));
+    if (a.running) name.append(el("span", "dot"));
+    name.append(document.createTextNode(a.display_name || "Not signed in yet"));
+    const meta = el("div", "acct-meta", a.elsewhere ? `${a.name}, open in another vocabbot` : `${a.name}, ${ago(a.last_used)}`);
+    const actions = el("div", "acct-actions");
+    if (a.running) {
+      const b = el("button", "btn", "Stop"); b.onclick = () => act(api.stop(a.name)); actions.append(b);
+    } else {
+      const b = el("button", "btn", "Start"); b.disabled = a.elsewhere; b.onclick = () => act(api.start(a.name));
+      const x = el("button", "btn quiet icon-btn", "✕"); x.title = "Remove this account and its saved login";
+      x.setAttribute("aria-label", `Remove ${a.display_name || a.name}`);
+      x.disabled = a.elsewhere;
+      x.onclick = async () => {
+        if (await ask(`Remove ${a.display_name || a.name}?`, "This deletes its Chrome profile, including the saved Vocabulary.com login. Saved answers are kept.", "Remove account"))
+          act(api.forget(a.name));
+      };
+      actions.append(b, x);
+    }
+    li.append(name, actions, meta);
+    ul.append(li);
+  }
+}
+
+function makePanel(name) {
+  const p = el("article", "panel");
+  p.innerHTML = `
+    <div class="p-head"><div class="p-title"></div><span class="state"></span></div>
+    <div class="body"></div>
+    <div class="stats">
+      <div class="stat right"><b data-k="correct"></b><span>right</span></div>
+      <div class="stat wrong"><b data-k="wrong"></b><span>wrong</span></div>
+      <div class="stat"><b data-k="cache_hits"></b><span>from saved</span></div>
+      <div class="stat"><b data-k="ai_calls"></b><span>asked AI</span></div>
+      <div class="stat"><b data-k="done"></b><span>finished</span></div>
+    </div>
+    <div class="p-foot"><span class="time"></span><button class="btn"></button></div>`;
+  p.dataset.word = "";
+  panels.set(name, p);
+  $("panels").append(p);
+  return p;
+}
+
+function renderPanel(s) {
+  const p = panels.get(s.name) || makePanel(s.name);
+  const title = p.querySelector(".p-title");
+  title.replaceChildren(document.createTextNode(s.account || s.name));
+  if (s.account) title.append(el("small", "", s.name));
+
+  const state = p.querySelector(".state");
+  const st = s.stopping ? "stopped" : s.state;
+  state.className = `state ${st}`; state.textContent = s.stopping ? "Stopping" : (STATE_LABEL[s.state] || s.state);
+  p.classList.toggle("ended", !s.alive);
+
+  const body = p.querySelector(".body");
+  if (s.state === "answering" && s.detail && !s.detail.startsWith("Image question")) {
+    const h = headword(s.detail);
+    if (p.dataset.word !== h.word || !body.querySelector(".word")) {
+      const w = el("div", "word" + (h.long ? " long" : ""));
+      const mark = el("span", "hl swipe", h.word); w.append(mark);
+      body.replaceChildren(w, el("div", "prompt", h.prompt));
+      p.dataset.word = h.word;
+    }
+  } else {
+    p.dataset.word = "";
+    const text = WAITING_TEXT[s.detail] || s.detail || (s.alive ? "" : "This window has closed.");
+    if (body.textContent !== text) body.replaceChildren(el("div", "msg", text));
+  }
+  for (const b of p.querySelectorAll("[data-k]")) b.textContent = s[b.dataset.k];
+  p.querySelector(".time").textContent = s.alive ? `Running ${clock(s.seconds)}` : "Ended";
+  const btn = p.querySelector(".p-foot .btn");
+  if (s.alive) { btn.textContent = "Stop"; btn.disabled = s.stopping; btn.onclick = () => act(api.stop(s.name)); }
+  else { btn.textContent = "Clear"; btn.disabled = false; btn.onclick = () => act(api.dismiss(s.name)); }
+}
+
+function renderSessions(sessions) {
+  const seen = new Set(sessions.map(s => s.name));
+  for (const [name, p] of panels) if (!seen.has(name)) { p.remove(); panels.delete(name); }
+  sessions.forEach(renderPanel);
+  $("empty").hidden = sessions.length > 0;
+}
+
+function renderFeed(events) {
+  for (const e of events) {
+    const m = e.text.match(/^Picked (['"])(.*)\1: (right|wrong|no response)$/);  // Python repr quoting
+    if (m) feedItems.unshift({ ...e, what: m[2], result: m[3] });
+    else if (/^(Assignment complete|Signed in as|Achievement unlocked|Cached answer was wrong)/.test(e.text)) feedItems.unshift({ ...e, what: e.text, result: "note" });
+  }
+  feedItems = feedItems.slice(0, 80);
+  const ul = $("feed"); ul.replaceChildren();
+  if (!feedItems.length) { ul.append(el("li", "feed-empty", "Answers show up here as they happen.")); return; }
+  for (const f of feedItems) {
+    const li = el("li");
+    const t = el("time", "", new Date(f.time * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" }));
+    const mark = f.result === "right" ? ["right", "✓"] : f.result === "wrong" ? ["wrong", "✗"] : ["", f.result === "note" ? "·" : "?"];
+    li.append(t, el("span", "who", accountLabel.get(f.session) || f.session), el("span", `mark ${mark[0]}`, mark[1]), el("span", "what", f.what));
+    ul.append(li);
+  }
+}
+
+async function poll() {
+  try {
+    const st = await api.poll(lastEvent);
+    renderTotals(st.totals); renderAccounts(st.accounts); renderSessions(st.sessions);
+    if (st.events.length) { lastEvent = st.events[st.events.length - 1].id; renderFeed(st.events); }
+    else if (!feedItems.length) renderFeed([]);
+  } catch (e) { console.error(e); }
+  setTimeout(poll, 700);
+}
+
+/* ---------- screens ---------- */
+function showSetup() { $("setup").hidden = false; $("app").hidden = true; $("setup-key").focus(); }
+async function showApp() {
+  $("setup").hidden = true; $("app").hidden = false;
+  $("version").textContent = `Version ${settings.version}`;
+  $("add-name").value = await api.new_account_name();
+  poll();
+}
+
+$("setup-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const btn = $("setup-save"); btn.disabled = true; btn.textContent = "Checking…"; $("setup-error").textContent = "";
+  const err = await api.set_api_key($("setup-key").value).catch(String);
+  btn.disabled = false; btn.textContent = "Check and save key";
+  if (err) { $("setup-error").textContent = err; return; }
+  settings = (await api.boot()).settings; showApp();
+});
+
+$("add-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const name = $("add-name").value.trim();
+  if (!name) return;
+  const err = await act(api.start(name));
+  if (!err) { toast(`Opening Chrome for ${name}. Sign in to Vocabulary.com there.`); $("add-name").value = await api.new_account_name(); }
+});
+
+$("start-all").onclick = async () => {
+  const st = await api.poll(lastEvent);
+  for (const a of st.accounts) if (!a.running && !a.elsewhere) await act(api.start(a.name));
+};
+
+$("open-settings").onclick = () => {
+  $("s-model").value = settings.model; $("s-min").value = settings.min_wait; $("s-max").value = settings.max_wait;
+  $("s-key-hint").textContent = `Saved key ending ${settings.key_hint}`; $("s-key").value = "";
+  $("s-home").textContent = `Data folder: ${settings.home}`; $("settings-error").textContent = "";
+  $("settings").showModal();
+};
+$("settings-close").onclick = () => $("settings").close();
+$("settings-form").addEventListener("submit", async (e) => {
+  e.preventDefault();  // Enter in any field saves
+  const btn = $("settings-save"); btn.disabled = true; btn.textContent = "Saving…";
+  const err = await api.save_settings($("s-model").value, $("s-min").value, $("s-max").value).catch(String);
+  btn.disabled = false; btn.textContent = "Save settings";
+  if (err) { $("settings-error").textContent = err; return; }
+  settings = (await api.boot()).settings; $("settings").close(); toast("Settings saved");
+});
+$("s-key-save").onclick = async () => {
+  const btn = $("s-key-save"); btn.disabled = true; btn.textContent = "Checking…";
+  const err = await api.set_api_key($("s-key").value).catch(String);
+  btn.disabled = false; btn.textContent = "Replace key";
+  if (err) { $("settings-error").textContent = err; return; }
+  settings = (await api.boot()).settings; $("s-key").value = ""; $("s-key-hint").textContent = `Saved key ending ${settings.key_hint}`; toast("API key replaced");
+};
+document.querySelectorAll("[data-folder]").forEach(b => b.onclick = () => act(api.open_folder(b.dataset.folder)));
+document.querySelectorAll("[data-open]").forEach(a => a.onclick = (e) => { e.preventDefault(); api.open_url(a.dataset.open); });
+
+whenReady(async () => {
+  settings = (await api.boot()).settings;
+  settings.has_key ? showApp() : showSetup();
+});
+</script>
+</body>
+</html>
