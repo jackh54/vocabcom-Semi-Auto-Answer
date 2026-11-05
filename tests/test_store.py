@@ -55,3 +55,11 @@ def test_import_legacy_runs_once(tmp_path):
     assert store.import_legacy(cache, stats) == 0
     assert store.lookup("Q\nContext: s", ["y", "x"]) == 0
     assert store.counters()["correct_answers"] == 5
+
+
+def test_account_names_upsert(tmp_path):
+    store = Store(tmp_path / "db.sqlite")
+    store.set_account_name("session-1", "Old Name")
+    store.set_account_name("session-1", "New Name")
+    store.set_account_name("session-2", "Other")
+    assert store.account_names() == {"session-1": "New Name", "session-2": "Other"}

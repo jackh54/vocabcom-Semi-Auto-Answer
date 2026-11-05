@@ -108,7 +108,7 @@ def main(argv: list[str]) -> int:
     names = args.profile
     if not names and args.sessions is None:
         try:
-            names = accounts.pick(console, DATA / "profiles") if sys.stdin.isatty() else ["session-1"]
+            names = accounts.pick(console, DATA / "profiles", store.account_names()) if sys.stdin.isatty() else ["session-1"]
         except (KeyboardInterrupt, EOFError):
             store.close()
             return 0

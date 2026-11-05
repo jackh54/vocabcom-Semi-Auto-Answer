@@ -31,6 +31,11 @@ CREATE TABLE IF NOT EXISTS counters (
     name  TEXT PRIMARY KEY,
     value INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS accounts (
+    profile      TEXT PRIMARY KEY,  -- folder name in data/profiles
+    display_name TEXT NOT NULL,     -- signed-in Vocabulary.com name, last seen
+    updated      REAL NOT NULL
+);
 CREATE TABLE IF NOT EXISTS meta (
     name  TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -108,6 +113,21 @@ class Store:
                    times_used = times_used + 1""",
             (key, answer, question, json.dumps(choices), now, now),
         )
+
+    # ---- account names -------------------------------------------------
+
+    def set_account_name(self, profile: str, display_name: str) -> None:
+        with self._lock:
+            self._db.execute(
+                """INSERT INTO accounts (profile, display_name, updated) VALUES (?, ?, ?)
+                   ON CONFLICT(profile) DO UPDATE SET display_name = excluded.display_name,
+                                                      updated = excluded.updated""",
+                (profile, display_name, time.time()),
+            )
+
+    def account_names(self) -> dict[str, str]:
+        with self._lock:
+            return dict(self._db.execute("SELECT profile, display_name FROM accounts").fetchall())
 
     # ---- counters ------------------------------------------------------
 

@@ -44,9 +44,11 @@ def _render(sessions: list[Session], store: Store) -> Group:
 
     for s in sessions:
         st = s.status
-        table.add_row(st.name, Text(st.state, style=_STATE_STYLE.get(st.state, "")),
+        label = f"{st.account} ({st.name})" if st.account else st.name
+        # Text(...) so names/questions containing [brackets] aren't parsed as rich markup
+        table.add_row(Text(label), Text(st.state, style=_STATE_STYLE.get(st.state, "")),
                       str(st.correct), str(st.wrong), str(st.cache_hits), str(st.ai_calls),
-                      _runtime(st.started), st.detail)
+                      _runtime(st.started), Text(st.detail))
 
     c = store.counters()
     lookups = c["cache_hits"] + c["cache_misses"]

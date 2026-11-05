@@ -41,6 +41,18 @@ SEL_FINISHED = ".practiceComplete.activity-summary"
 SEL_BLOCKER = "div.blocker"
 SEL_COUNTDOWN = "div.blocker .countdown"
 
+# Vocabulary.com caches the signed-in user in localStorage["me/auth"]; read just the name.
+_ACCOUNT_NAME_JS = """
+try {
+  const raw = localStorage.getItem('me/auth');
+  if (!raw) return null;
+  const auth = ((JSON.parse(raw) || {}).value || {}).auth || {};
+  return auth.loggedin ? (auth.fullname || auth.nickname || null) : null;
+} catch (e) { return null; }
+"""
+NAME_REFRESH = 60.0         # seconds between re-reading the signed-in name once known
+NAME_REFRESH_UNKNOWN = 5.0  # ...and while waiting for the user to sign in
+
 STUCK_AFTER = 25.0     # seconds on one question with no progress before reloading the page
 RESULT_TIMEOUT = 4.0   # seconds to wait for the page to mark an answer right or wrong
 
@@ -62,6 +74,7 @@ class Question:
 class SessionStatus:
     """What the dashboard shows. Written by the session thread, read by the UI thread."""
     name: str
+    account: str = ""              # signed-in Vocabulary.com name, once known
     state: str = "starting"
     detail: str = ""
     correct: int = 0
@@ -92,6 +105,7 @@ class Session:
         self._last_answer: float | None = None
         self._current_done = False
         self._finished_seen = False
+        self._name_checked = 0.0
 
     # ---- lifecycle -----------------------------------------------------
 
@@ -185,6 +199,7 @@ class Session:
     # ---- main loop -----------------------------------------------------
 
     def _tick(self) -> None:
+        self._refresh_account_name()
         if self._wait_out_blocker():
             return
 
@@ -385,6 +400,22 @@ class Session:
         return None
 
     # ---- interstitials -------------------------------------------------
+
+    def _refresh_account_name(self) -> None:
+        now = time.monotonic()
+        interval = NAME_REFRESH if self.status.account else NAME_REFRESH_UNKNOWN
+        if now - self._name_checked < interval:
+            return
+        self._name_checked = now
+        try:
+            name = self._d.execute_script(_ACCOUNT_NAME_JS)
+        except WebDriverException:
+            return
+        name = name.strip()[:40] if isinstance(name, str) else ""
+        if name and name != self.status.account:
+            self.log.info("Signed in as %s", name)
+            self.store.set_account_name(self.name, name)
+        self.status.account = name
 
     def _wait_out_blocker(self) -> bool:
         if not self._exists(SEL_BLOCKER):

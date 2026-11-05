@@ -14,6 +14,7 @@ from rich import box
 from rich.console import Console
 from rich.prompt import Prompt
 from rich.table import Table
+from rich.text import Text
 
 from . import browser
 
@@ -79,18 +80,21 @@ def parse_selection(text: str, accounts: list[Account]) -> list[str]:
     return names
 
 
-def pick(console: Console, profiles: Path) -> list[str]:
-    """Ask which accounts to run, one session each."""
+def pick(console: Console, profiles: Path, display_names: dict[str, str] | None = None) -> list[str]:
+    """Ask which accounts to run, one session each. display_names maps profile -> signed-in name."""
+    display_names = display_names or {}
     accounts = list_accounts(profiles)
     if accounts:
         table = Table(box=box.SIMPLE, title="Saved accounts", title_justify="left")
         table.add_column("#", justify="right", style="bold")
         table.add_column("Account")
+        table.add_column("Signed in as")
         table.add_column("Last used", style="dim")
         for i, a in enumerate(accounts, start=1):
             when = a.last_used.strftime("%Y-%m-%d %H:%M") if a.last_used else "-"
             label = f"{a.name} [yellow](running elsewhere)[/]" if a.in_use else a.name
-            table.add_row(str(i), label, when)
+            shown = Text(display_names[a.name]) if a.name in display_names else Text("-", style="dim")
+            table.add_row(str(i), label, shown, when)
         console.print(table)
         console.print("Type numbers or names separated by commas, or [bold]all[/]. "
                       "A new name adds an account; sign in once in its window and it's saved.")
