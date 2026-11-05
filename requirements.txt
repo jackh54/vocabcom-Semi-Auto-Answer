@@ -1,5 +1,4 @@
-undetected-chromedriver>=3.5.4
+undetected-chromedriver>=3.5.5
 selenium>=4.16.0
 openai>=1.12.0
-PyQt6>=6.6.1
-qt-material
+rich>=13.0

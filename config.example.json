@@ -1,13 +1,11 @@
 {
   "openai_api_key": "",
+  "model": "gpt-4o-mini",
   "chrome_options": {
     "disable_gpu": true,
-    "no_sandbox": true,
     "disable_dev_shm_usage": true,
-    "suppress_errors": true,
-    "window_size": "1920,1079"
+    "window_size": "1280,900"
   },
-  "enable_logging": false,
   "log_level": "INFO",
   "min_wait_time": 2,
   "max_wait_time": 5

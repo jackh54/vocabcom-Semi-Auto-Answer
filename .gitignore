@@ -164,3 +164,8 @@ cython_debug/
 # Project specific
 config.json
 statistics.json
+
+# vocabbot runtime data (answer DB, Chrome profiles with logins, logs)
+data/
+logs/
+question_cache.json
