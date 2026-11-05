@@ -88,6 +88,8 @@ class Session:
         self._driver_lock = threading.Lock()
         self._current: tuple[str, str] | None = None   # ident of the question on screen
         self._current_since = 0.0
+        self._answer_at = 0.0                 # monotonic time the next answer may be submitted
+        self._last_answer: float | None = None
         self._current_done = False
         self._finished_seen = False
 
@@ -215,6 +217,10 @@ class Session:
         now = time.monotonic()
         if question.ident != self._current:
             self._current, self._current_since, self._current_done = question.ident, now, False
+            # Pace answers min_wait..max_wait seconds after the previous one (or after this
+            # question appeared, if there was a break), however long the page or AI took.
+            recent = self._last_answer is not None and now - self._last_answer < 30
+            self._schedule_next(self._last_answer if recent else now)
 
         if now - self._current_since > STUCK_AFTER:
             self._reload("No progress on this question")
@@ -273,7 +279,6 @@ class Session:
             self.store.forget(q.text, q.choices)
             self._count("wrong_answers")
             tried.add(cached)
-            self._sleep(random.uniform(self.config.min_wait, self.config.max_wait))
         else:
             self._count("cache_misses")
 
@@ -293,13 +298,12 @@ class Session:
                 return True
             self._count("wrong_answers")
             tried.add(index)
-            self._sleep(random.uniform(self.config.min_wait, self.config.max_wait))
         return False
 
     def _answer_image(self, q: Question) -> bool:
         self._set("answering", "Image question - trying each picture")
         for index in range(len(q.links)):
-            outcome = self._try(q, index, pause=0.5)
+            outcome = self._try(q, index, pause=None if index == 0 else 0.5)
             if outcome is None:
                 return False
             if outcome:
@@ -319,7 +323,9 @@ class Session:
         wrong_before = self._count_wrong()
         box = q.element.find_element(By.CSS_SELECTOR, SEL_SPELLING_INPUT)
         box.clear()
+        self._wait_for_turn()
         box.send_keys(word + Keys.RETURN)
+        self._answered()
         if self._await_result(wrong_before):
             self._count("correct_answers")
             return True
@@ -336,8 +342,9 @@ class Session:
     def _try(self, q: Question, index: int, pause: float | None = None) -> bool | None:
         """Click a choice. True = correct, False = wrong, None = couldn't tell (page changed / no response)."""
         if pause is None:
-            pause = random.uniform(self.config.min_wait / 2, self.config.min_wait)
-        self._sleep(pause)
+            self._wait_for_turn()
+        else:
+            self._sleep(pause)
         if self.stop.is_set():
             return None
 
@@ -349,9 +356,21 @@ class Session:
         except WebDriverException as e:
             self.log.info("Could not click choice %d: %s", index + 1, (e.msg or str(e)).splitlines()[0])
             return None
+        self._answered()
         label = q.choices[index] if q.choices else f"picture {index + 1}"
         self.log.info("Picked %r", label)
         return self._await_result(wrong_before)
+
+    def _schedule_next(self, base: float) -> None:
+        self._answer_at = base + random.uniform(self.config.min_wait, self.config.max_wait)
+
+    def _wait_for_turn(self) -> None:
+        self._sleep(max(0.0, self._answer_at - time.monotonic()))
+
+    def _answered(self) -> None:
+        """Record a submitted answer; a retry on the same question waits a fresh interval."""
+        self._last_answer = time.monotonic()
+        self._schedule_next(self._last_answer)
 
     def _await_result(self, wrong_before: int) -> bool | None:
         """Wait for the page to react. Compares the count of `.wrong` marks so that a

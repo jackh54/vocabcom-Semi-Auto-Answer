@@ -7,6 +7,6 @@
     "window_size": "1280,900"
   },
   "log_level": "INFO",
-  "min_wait_time": 2,
+  "min_wait_time": 3,
   "max_wait_time": 5
 }

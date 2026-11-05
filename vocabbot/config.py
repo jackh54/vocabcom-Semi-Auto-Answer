@@ -18,7 +18,7 @@ class Config:
     openai_api_key: str
     model: str = DEFAULT_MODEL
     chrome_args: tuple[str, ...] = ()
-    min_wait: float = 2.0
+    min_wait: float = 3.0
     max_wait: float = 5.0
     log_level: str = "INFO"
 
@@ -49,7 +49,7 @@ def load_config(path: Path) -> Config:
             f"No OpenAI API key. Set openai_api_key in {path.name} or the OPENAI_API_KEY environment variable."
         )
 
-    min_wait = float(raw.get("min_wait_time", 2))
+    min_wait = float(raw.get("min_wait_time", 3))
     max_wait = float(raw.get("max_wait_time", 5))
     if min_wait < 0 or max_wait < min_wait:
         raise ConfigError("min_wait_time must be >= 0 and <= max_wait_time")

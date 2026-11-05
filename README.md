@@ -61,7 +61,7 @@ An account is just a folder: rename `data/profiles/<old>` to change its name, de
 | `openai_api_key` | | OpenAI key (falls back to `OPENAI_API_KEY`) |
 | `model` | `gpt-4o-mini` | OpenAI model used when the cache has no answer |
 | `chrome_options` | | Extra Chrome flags: `"disable_gpu": true` becomes `--disable-gpu`, `"window_size": "1280,900"` becomes `--window-size=1280,900` |
-| `min_wait_time` / `max_wait_time` | 2 / 5 | Delay range in seconds. Before each click: half of min to min. After a wrong answer or reload: min to max |
+| `min_wait_time` / `max_wait_time` | 3 / 5 | Seconds between answers: each answer is submitted a random min to max seconds after the previous one (retries after a wrong pick too). Also the wait after a page reload |
 | `log_level` | `INFO` | Log file level |
 
 ## Data
