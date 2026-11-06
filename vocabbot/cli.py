@@ -16,7 +16,7 @@ import openai
 from rich.console import Console
 from rich.prompt import Prompt
 
-from vocabbot import __version__, accounts, browser, dashboard
+from vocabbot import __version__, accounts, browser, dashboard, pick_cli
 from vocabbot.accounts import valid_name
 from vocabbot.answerer import Answerer
 from vocabbot.config import ConfigError, MissingKeyError, load_config, write_initial_config
@@ -157,9 +157,10 @@ def main(argv: list[str]) -> int:
     for t in threads:
         t.start()
 
-    console.print(f"Opening {len(sessions)} Chrome window(s). Sign in and open an assignment in each; "
-                  f"they start on their own. Log: {LOG_FILE}")
+    console.print(f"Opening {len(sessions)} Chrome window(s). Sign in to Vocabulary.com in any that ask. "
+                  f"Log: {LOG_FILE}")
     try:
+        pick_cli.pick(console, sessions, threads, stop)
         dashboard.run(sessions, threads, store, stop, console)
     except KeyboardInterrupt:
         console.print("\nStopping...")

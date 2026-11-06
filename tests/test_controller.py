@@ -136,3 +136,33 @@ def test_accounts_dont_probe_running_profiles(ctl, monkeypatch):
     accounts = {a["name"]: a for a in ctl.accounts(max_age=0)}
     assert accounts["alice"]["running"] and not accounts["alice"]["elsewhere"]
     assert "alice" not in probed and "bob" in probed
+
+
+def _give(ctl, name, assignments, state="choosing"):
+    st = ctl._running[name].session.status
+    st.assignments, st.assignments_loaded, st.state = assignments, True, state
+
+
+def _a(id_, supported=True):
+    return {"id": id_, "name": id_.upper(), "url": f"https://example.test/{id_}", "supported": supported,
+            "kind_label": "Practice" if supported else "Quiz"}
+
+
+def test_shared_assignments_and_open_shared(ctl, monkeypatch):
+    opened = []
+    monkeypatch.setattr(FakeSession, "request_assignment",
+                        lambda self, aid: opened.append((self.name, aid)) or None, raising=False)
+    ctl.start("alice")
+    ctl.start("bob")
+    _give(ctl, "alice", [_a("u7"), _a("u8"), _a("quiz", False)])
+    _give(ctl, "bob", [_a("u8"), _a("quiz", False), _a("u7")])
+    assert [a["id"] for a in ctl.snapshot()["shared"]] == ["u7", "u8"]
+    assert ctl.snapshot()["shared"][0]["accounts"] == 2
+
+    _give(ctl, "bob", [_a("u8")], state="answering")   # busy accounts don't count
+    assert ctl.snapshot()["shared"] == []
+
+    _give(ctl, "bob", [_a("u8")])
+    assert ctl.open_shared("u8") is None
+    assert sorted(opened) == [("alice", "u8"), ("bob", "u8")]
+    assert "No waiting account" in ctl.open_shared("missing")

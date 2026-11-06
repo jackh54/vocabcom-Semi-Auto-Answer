@@ -62,6 +62,12 @@ class Api:
     def forget(self, name):
         return self._ctl.forget_account(str(name))
 
+    def open_assignment(self, name, assignment_id):
+        return self._ctl.open_assignment(str(name), str(assignment_id))
+
+    def open_shared(self, assignment_id):
+        return self._ctl.open_shared(str(assignment_id))
+
     def new_account_name(self):
         return self._ctl.next_account_name()
 

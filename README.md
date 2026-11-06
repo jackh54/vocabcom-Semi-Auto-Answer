@@ -9,6 +9,7 @@ Answers Vocabulary.com assignment questions in Chrome using an answer cache firs
 - **Desktop app** for macOS (Apple Silicon and Intel) and Windows: add accounts, start and stop them, and watch every session live
 - **Multiple sessions**: each account gets its own Chrome window and profile, so several assignments or accounts run side by side
 - **Saved accounts**: sign in to Vocabulary.com once per account; the app shows who's signed in to each
+- **Assignment picker**: lists each account's unfinished assignments; one that every account has comes first, with a button to start it on all of them
 - **Shared answer cache** (SQLite): an answer learned in one session is reused by all of them, and by later runs
 - Handles multiple-choice, sentence-context, image and spelling questions, countdown blockers, achievements and round screens
 - Answers 3–5 seconds apart (adjustable), moves on after wrong picks, reloads the page if a question gets stuck
@@ -35,8 +36,11 @@ You also need Google Chrome. On Windows the app uses Microsoft Edge WebView2, wh
 
 1. On first open, paste your OpenAI API key. It's checked with OpenAI and saved on your computer only.
 2. Click **Add account**. A Chrome window opens on Vocabulary.com; sign in there. Next time it opens already signed in.
-3. Open an assignment in that window. It starts answering on its own.
-4. Start more accounts from the sidebar to run them side by side. **Stop** ends one; closing vocabbot ends them all.
+3. Its unfinished assignments appear in its panel. Click **Start** on one.
+4. Start more accounts from the sidebar. When every waiting account has the same assignment, it shows at the top: **Start on all** runs it on each of them. Otherwise pick one per account.
+5. When an assignment finishes, the account goes back to its list for the next one. **Stop** ends one account; closing vocabbot ends them all.
+
+Only Practice assignments are answered automatically; Spelling Bee and Quiz assignments are listed but marked "Not supported". You can still open anything yourself in an account's Chrome window and it answers practice questions it finds.
 
 **Settings** has the OpenAI model, the gap between answers, your API key, and buttons to open the data and log folders. The app keeps everything in your user folder, so updating is just replacing the app:
 - Mac: `~/Library/Application Support/vocabbot`
@@ -63,7 +67,7 @@ Put your key in `config.json` (or leave it blank and set `OPENAI_API_KEY`). `con
 
 ```bash
 python main.py --gui             # the desktop app
-python main.py                   # terminal version: choose accounts from a list (or add new ones)
+python main.py                   # terminal version: choose accounts, then assignments (shared ones first)
 python main.py -a alice -a bob   # run these accounts without the list
 python main.py -n 3              # three sessions named session-1..3
 ```

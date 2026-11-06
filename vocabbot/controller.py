@@ -19,9 +19,10 @@ import openai
 
 from . import __version__, browser
 from .accounts import list_accounts, valid_name
+from .assignments import shared_ids
 from .answerer import Answerer
 from .config import Config, ConfigError, MissingKeyError, load_config, write_initial_config
-from .session import Session
+from .session import IDLE_STATES, Session
 from .store import Store
 
 log = logging.getLogger(__name__)
@@ -225,6 +226,45 @@ class Controller:
             for r in self._running.values():
                 r.stop.set()
 
+    # ---- assignments ---------------------------------------------------
+
+    def _choosers(self) -> list[_Running]:
+        """Running sessions that are signed in, idle, and have read their assignment list."""
+        with self._lock:
+            runs = list(self._running.values())
+        return [r for r in runs if r.thread.is_alive() and not r.stop.is_set()
+                and r.session.status.state in IDLE_STATES and r.session.status.assignments_loaded]
+
+    def shared_assignments(self) -> list[dict]:
+        """Supported assignments that every idle account still has to do (needs 2+ accounts)."""
+        choosers = self._choosers()
+        lists = [r.session.status.assignments for r in choosers]
+        ids = shared_ids(lists)
+        first = {a["id"]: a for a in lists[0]} if lists else {}
+        return [{**first[i], "accounts": len(choosers)} for i in ids]
+
+    def open_assignment(self, name: str, assignment_id: str) -> str | None:
+        with self._lock:
+            r = self._running.get(name)
+        if r is None or not r.thread.is_alive():
+            return f"{name} isn't running."
+        return r.session.request_assignment(assignment_id)
+
+    def open_shared(self, assignment_id: str) -> str | None:
+        """Open one assignment on every idle account that has it."""
+        errors = []
+        opened = 0
+        for r in self._choosers():
+            if any(a["id"] == assignment_id for a in r.session.status.assignments):
+                err = r.session.request_assignment(assignment_id)
+                if err:
+                    errors.append(err)
+                else:
+                    opened += 1
+        if errors:
+            return " ".join(errors)
+        return None if opened else "No waiting account has that assignment."
+
     def dismiss(self, name: str) -> None:
         """Remove a finished session's panel."""
         with self._lock:
@@ -275,11 +315,13 @@ class Controller:
                 "ai_calls": st.ai_calls, "done": st.assignments_done,
                 "seconds": int(time.monotonic() - st.started),
                 "alive": r.thread.is_alive(), "stopping": r.stop.is_set() and r.thread.is_alive(),
+                "assignments": list(st.assignments), "assignments_loaded": st.assignments_loaded,
             })
         c = self.store.counters()
         lookups = c["cache_hits"] + c["cache_misses"]
         return {
             "sessions": sessions,
+            "shared": self.shared_assignments(),
             "totals": {**c, "answers_cached": self.store.answer_count(),
                        "hit_rate": round(100 * c["cache_hits"] / lookups) if lookups else None},
             "events": self.feed.since(events_since),

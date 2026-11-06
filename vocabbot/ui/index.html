@@ -144,7 +144,8 @@ button, input { font: inherit; color: inherit; }
   font-size: 12px; font-weight: 600; padding: 2px 9px; border-radius: 999px;
   border: 1px solid currentColor; color: var(--muted); white-space: nowrap;
 }
-.state.answering { color: var(--right); }
+.state.answering, .state.opening { color: var(--right); }
+.state.choosing { color: var(--ink); }
 .state.waiting, .state.blocked { color: var(--wait); }
 .state.done { color: var(--on-highlight); background: var(--highlight); border-color: var(--highlight); }
 .state.error, .state.closed { color: var(--wrong); }
@@ -162,6 +163,23 @@ button, input { font: inherit; color: inherit; }
 .empty { max-width: 460px; margin: 10vh auto 0; text-align: center; }
 .empty h2 { font-family: var(--serif); font-size: 26px; font-weight: 600; margin: 0 0 10px; }
 .empty p { color: var(--muted); margin: 0 0 18px; }
+
+/* ---- assignments ---- */
+.shared {
+  background: var(--surface); border: 1px solid var(--rule); border-radius: 14px; box-shadow: var(--shadow);
+  padding: 16px 18px 6px; margin-bottom: 16px;
+}
+.shared h2 { font-size: 15px; font-weight: 600; margin: 0; }
+.shared .sub { color: var(--muted); margin: 2px 0 8px; font-size: 13px; }
+.alist { list-style: none; margin: 0; padding: 0; }
+.alist li { display: grid; grid-template-columns: 1fr auto; gap: 1px 12px; align-items: center; padding: 9px 0; border-top: 1px solid var(--rule); }
+.a-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.a-meta { grid-column: 1; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.a-meta .late { color: var(--wrong); }
+.alist .btn { grid-row: 1 / span 2; grid-column: 2; }
+.tag { font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 4px; margin-left: 6px; background: var(--mark); color: var(--ink); vertical-align: 1px; }
+.panel .alist { margin-top: 10px; max-height: 196px; overflow-y: auto; }
+.panel .msg.small { font-family: var(--sans); font-size: 14px; color: var(--muted); margin: 14px 0 0; }
 
 /* ---- activity ---- */
 .activity { margin-top: 28px; }
@@ -260,6 +278,11 @@ dialog p.lead { color: var(--muted); margin: 0 0 18px; }
         <h2>Nothing running</h2>
         <p>Start an account on the left. Its Chrome window opens on Vocabulary.com; sign in if asked, open an assignment, and it starts answering on its own.</p>
       </div>
+      <section class="shared" id="shared" hidden>
+        <h2>Same assignment on every account</h2>
+        <p class="sub" id="shared-sub"></p>
+        <ul class="alist" id="shared-list"></ul>
+      </section>
       <div class="grid" id="panels"></div>
       <section class="activity">
         <h2>Activity</h2>
@@ -339,11 +362,22 @@ function useMock() {
     { name: "account-3", display_name: "", last_used: Date.now() / 1000 - 86400 * 9, running: false, elsewhere: false },
   ];
   let hasKey = !location.hash.includes("setup");
+  const choosing = location.hash.includes("choose");
+  const day = (n) => new Date(Date.now() + n * 86400000).toISOString();
+  const A = (id, name, kind, words, due, pct, cls) => ({ id, name, kind, kind_label: { p: "Practice", s: "Spelling Bee", q: "Quiz" }[kind],
+    words, due: day(due), pct, class_name: cls, supported: kind === "p", url: "#" });
+  const lists = [
+    [A("u8", "Unit 8: Persuasion", "p", 20, 3, 0, "Period 3 English"), A("bee", "Unit 8 Spelling Bee", "s", 20, 4, 0, "Period 3 English"), A("u7", "Unit 7 review", "p", 24, -1, 40, "Period 3 English")],
+    [A("u8", "Unit 8: Persuasion", "p", 20, 3, 15, "Period 3 English"), A("sat", "SAT words, set 2", "p", 30, 6, 0, "Advisory")],
+  ];
+  let opened = {};
   const sessions = () => accounts.filter(a => a.running).map((a, i) => {
     const s = Math.floor((Date.now() - t0) / 1000) + 600 * (i + 1);
     const w = words[(Math.floor(s / 4) + i * 3) % words.length];
-    return { name: a.name, account: a.display_name, state: i === 1 && s % 40 > 30 ? "done" : "answering",
-      detail: i === 1 && s % 40 > 30 ? "Assignment complete - open another one in this window" : `${w} has the same or almost the same meaning as:`,
+    const idle = choosing && !opened[a.name];
+    return { name: a.name, account: a.display_name, state: idle ? "choosing" : "answering",
+      detail: idle ? "Choose an assignment" : `${w} has the same or almost the same meaning as:`,
+      assignments: idle ? lists[i % lists.length] : [], assignments_loaded: true,
       correct: 40 + Math.floor(s / 5), wrong: 2 + (i % 2), cache_hits: 18 + Math.floor(s / 9), ai_calls: 25 + Math.floor(s / 7), done: i,
       seconds: s, alive: true, stopping: false };
   });
@@ -354,12 +388,17 @@ function useMock() {
   api = {
     boot: () => ok({ settings: { has_key: hasKey, key_hint: "…x9Qa", model: "gpt-4o-mini", min_wait: 3, max_wait: 5, home: "~/Library/Application Support/vocabbot", version: "2.1.0" } }),
     poll: (since) => ok({ sessions: sessions(), accounts, events: events.filter(e => e.id > since),
+      shared: (() => { const s = sessions().filter(x => x.state === "choosing"); if (s.length < 2) return [];
+        const ids = s.map(x => new Set(x.assignments.filter(a => a.supported).map(a => a.id)));
+        return s[0].assignments.filter(a => ids.every(set => set.has(a.id))).map(a => ({ ...a, accounts: s.length })); })(),
       totals: { correct_answers: 312, wrong_answers: 4, achievements: 7, cache_hits: 160, cache_misses: 107, answers_cached: 104, hit_rate: 60 } }),
     start: (name) => { let a = accounts.find(x => x.name === name); if (!a) { a = { name, display_name: "", last_used: null, running: false, elsewhere: false }; accounts.push(a); } a.running = true; return ok(null); },
     stop: (name) => { accounts.find(x => x.name === name).running = false; return ok(null); },
     stop_all: () => { accounts.forEach(a => a.running = false); return ok(null); },
     dismiss: () => ok(null), forget: (name) => { accounts = accounts.filter(a => a.name !== name); return ok(null); },
     new_account_name: () => ok(`account-${accounts.length + 1}`),
+    open_assignment: (name) => { opened[name] = true; return ok(null); },
+    open_shared: () => { accounts.forEach(a => opened[a.name] = true); return ok(null); },
     set_api_key: (k) => { if (!k.startsWith("sk-")) return ok("OpenAI rejected that key. Check it at platform.openai.com/api-keys."); hasKey = true; return ok(null); },
     save_settings: () => ok(null), open_folder: () => ok(null), open_url: (u) => { window.open(u); return ok(null); },
   };
@@ -404,11 +443,42 @@ function ask(title, text, yes) {
     d.addEventListener("close", () => resolve(d.returnValue === "yes"), { once: true });
   });
 }
-const STATE_LABEL = { answering: "Answering", waiting: "Waiting", done: "Done", blocked: "Paused", reloading: "Reloading",
+const STATE_LABEL = { answering: "Answering", waiting: "Waiting", choosing: "Pick an assignment", opening: "Opening", done: "Done", blocked: "Paused", reloading: "Reloading",
   launching: "Opening Chrome", starting: "Opening Chrome", error: "Error", closed: "Window closed", stopped: "Stopped" };
 const WAITING_TEXT = {
-  "Sign in and open an assignment in this window": "Sign in if asked, then open an assignment in its Chrome window.",
+  "Sign in to Vocabulary.com in this window": "Sign in to Vocabulary.com in its Chrome window. Its assignments show up here after that.",
+  "Choose an assignment": "Choose an assignment to start.",
 };
+const IDLE = new Set(["waiting", "choosing", "done"]);
+let sharedIds = new Set();
+
+function assignmentMeta(a) {
+  // Built from text nodes only: names and class names come from the site.
+  const box = el("div", "a-meta");
+  const parts = [];
+  parts.push(document.createTextNode(a.words ? `${a.kind_label}, ${a.words} words` : a.kind_label));
+  if (a.due) {
+    const due = new Date(a.due);
+    const day = due.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
+    parts.push(due < new Date() ? el("span", "late", `overdue since ${day}`) : document.createTextNode(`due ${day}`));
+  }
+  if (a.pct) parts.push(document.createTextNode(`${a.pct}% done`));
+  if (a.class_name) parts.push(document.createTextNode(a.class_name));
+  parts.forEach((node, i) => { if (i) box.append(", "); box.append(node); });
+  return box;
+}
+function assignmentItem(a, label, onStart, tag) {
+  const li = el("li");
+  const name = el("div", "a-name", a.name);
+  if (tag) name.append(el("span", "tag", tag));
+  const meta = assignmentMeta(a);
+  const btn = el("button", a.supported ? "btn primary" : "btn", a.supported ? label : "Not supported");
+  btn.disabled = !a.supported;
+  if (!a.supported) btn.title = "Only Practice assignments can be answered automatically";
+  btn.onclick = async () => { btn.disabled = true; await act(onStart()); };
+  li.append(name, btn, meta);
+  return li;
+}
 
 // Pull the word being asked about out of the question text, for the headword.
 function headword(detail) {
@@ -520,13 +590,42 @@ function renderPanel(s) {
   } else {
     p.dataset.word = "";
     const text = WAITING_TEXT[s.detail] || s.detail || (s.alive ? "" : "This window has closed.");
-    if (body.textContent !== text) body.replaceChildren(el("div", "msg", text));
+    const list = s.alive && IDLE.has(s.state) && !s.stopping ? s.assignments : [];
+    // Rebuild only when the message or list changes, so clicks aren't lost mid-press.
+    const key = JSON.stringify([text, list.map(a => [a.id, a.pct, sharedIds.has(a.id)])]);
+    if (p.dataset.body !== key) {
+      p.dataset.body = key;
+      const nodes = [el("div", list.length ? "msg small" : "msg", list.length && s.state !== "done" ? "Choose an assignment to start." : text)];
+      if (list.length) {
+        const ordered = [...list].sort((a, b) => sharedIds.has(b.id) - sharedIds.has(a.id));
+        const ul = el("ul", "alist");
+        for (const a of ordered)
+          ul.append(assignmentItem(a, "Start", () => api.open_assignment(s.name, a.id), sharedIds.has(a.id) ? "All accounts" : ""));
+        nodes.push(ul);
+      }
+      body.replaceChildren(...nodes);
+    }
   }
+  if (s.state === "answering") p.dataset.body = "";
   for (const b of p.querySelectorAll("[data-k]")) b.textContent = s[b.dataset.k];
   p.querySelector(".time").textContent = s.alive ? `Running ${clock(s.seconds)}` : "Ended";
   const btn = p.querySelector(".p-foot .btn");
   if (s.alive) { btn.textContent = "Stop"; btn.disabled = s.stopping; btn.onclick = () => act(api.stop(s.name)); }
   else { btn.textContent = "Clear"; btn.disabled = false; btn.onclick = () => act(api.dismiss(s.name)); }
+}
+
+let sharedKey = "";
+function renderShared(shared) {
+  sharedIds = new Set(shared.map(a => a.id));
+  const key = JSON.stringify(shared.map(a => [a.id, a.pct, a.accounts]));
+  if (key === sharedKey) return;
+  sharedKey = key;
+  $("shared").hidden = shared.length === 0;
+  if (!shared.length) return;
+  const n = shared[0].accounts;
+  $("shared-sub").textContent = `Each of your ${n} waiting accounts still has ${shared.length === 1 ? "this one" : "these"} to do. Start it on all of them at once, or pick per account below.`;
+  const ul = $("shared-list"); ul.replaceChildren();
+  for (const a of shared) ul.append(assignmentItem(a, `Start on all ${n}`, () => api.open_shared(a.id)));
 }
 
 function renderSessions(sessions) {
@@ -557,7 +656,7 @@ function renderFeed(events) {
 async function poll() {
   try {
     const st = await api.poll(lastEvent);
-    renderTotals(st.totals); renderAccounts(st.accounts); renderSessions(st.sessions);
+    renderTotals(st.totals); renderAccounts(st.accounts); renderShared(st.shared || []); renderSessions(st.sessions);
     if (st.events.length) { lastEvent = st.events[st.events.length - 1].id; renderFeed(st.events); }
     else if (!feedItems.length) renderFeed([]);
   } catch (e) { console.error(e); }

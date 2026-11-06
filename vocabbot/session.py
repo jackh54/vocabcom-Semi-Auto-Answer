@@ -18,6 +18,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.remote.webelement import WebElement
 
+from . import assignments as assignment_list
 from . import browser
 from .answerer import Answerer
 from .config import Config
@@ -52,6 +53,11 @@ try {
 NAME_REFRESH = 60.0         # seconds between re-reading the signed-in name once known
 NAME_REFRESH_UNKNOWN = 5.0  # ...and while waiting for the user to sign in
 
+ASSIGNMENTS_REFRESH = 60.0  # seconds between re-reading the assignment list while idle
+BETWEEN_QUESTIONS = 10.0    # a gap with no question shorter than this is still the same assignment
+RETURN_HOME_AFTER = 4.0     # seconds on the finished screen before going back to the assignments page
+IDLE_STATES = ("waiting", "choosing", "done")
+
 STUCK_AFTER = 25.0     # seconds on one question with no progress before reloading the page
 RESULT_TIMEOUT = 6.0   # seconds to wait for the page to mark an answer right or wrong
 
@@ -85,6 +91,8 @@ class SessionStatus:
     cache_hits: int = 0
     assignments_done: int = 0
     ai_calls: int = 0
+    assignments: list = field(default_factory=list)   # unfinished assignments (dicts), soonest due first
+    assignments_loaded: bool = False
     started: float = field(default_factory=time.monotonic)
 
 
@@ -99,6 +107,7 @@ class Session:
         self.answerer = answerer
         self.stop = stop
         self.status = SessionStatus(name)
+        self.start_url = START_URL
         self.log = logging.getLogger(f"vocabbot.session.{name}")
 
         self._driver = None
@@ -110,6 +119,13 @@ class Session:
         self._current_done = False
         self._finished_seen = False
         self._name_checked = 0.0
+        self._assignments_checked = 0.0
+        self._assignments_dirty = True
+        self._last_question_at = 0.0
+        self._opened_at = 0.0
+        self._return_home_at: float | None = None
+        self._open_request: tuple[str, str] | None = None  # (url, name) chosen from the app or CLI
+        self._request_lock = threading.Lock()
         self._failed: dict[str, set[str]] = {}  # cache key -> normalized choices that failed
 
     # ---- lifecycle -----------------------------------------------------
@@ -119,7 +135,7 @@ class Session:
             self._start_browser()
             if self.stop.is_set():
                 return
-            self._set("waiting", "Sign in and open an assignment in this window")
+            self._set("waiting", "Sign in to Vocabulary.com in this window")
 
             while not self.stop.is_set():
                 try:
@@ -158,7 +174,7 @@ class Session:
                 if self.stop.is_set():
                     return  # run()'s finally quits it
                 try:
-                    driver.get(START_URL)
+                    driver.get(self.start_url)
                 except NoSuchWindowException:
                     if not self._recover_window():
                         raise
@@ -186,8 +202,8 @@ class Session:
                 continue
             self.log.info("Switched to a live tab (%s)", url[:60])
             if "vocabulary.com" not in url:
-                self._d.get(START_URL)
-                self._set("waiting", "Sign in and open an assignment in this window")
+                self._d.get(self.start_url)
+                self._set("waiting", "Sign in to Vocabulary.com in this window")
             return True
         return False
 
@@ -205,16 +221,23 @@ class Session:
 
     def _tick(self) -> None:
         self._refresh_account_name()
+        if self._open_requested():
+            return
         if self._wait_out_blocker():
             return
 
         if self._exists(SEL_FINISHED):
             if not self._finished_seen:
                 self._finished_seen = True
+                self._assignments_dirty = True
                 self.status.assignments_done += 1
                 self.log.info("Assignment complete (%d this run)", self.status.assignments_done)
-                self._set("done", "Assignment complete - open another one in this window")
-            self._sleep(2)
+                self._set("done", "Assignment complete - choose the next one")
+                self._return_home_at = time.monotonic() + RETURN_HOME_AFTER
+            if self._return_home_at and time.monotonic() >= self._return_home_at:
+                self._return_home_at = None
+                self._d.get(self.start_url)  # its assignments page has the live list
+            self._sleep(1)
             return
 
         self._count_achievements()
@@ -224,9 +247,13 @@ class Session:
 
         if not self._exists(SEL_QUESTION):
             self._current = None
-            # Keep showing "done" after the summary screen until the next assignment starts.
-            if self.status.state not in ("waiting", "done"):
-                self._set("waiting", "Sign in and open an assignment in this window")
+            busy_since = max(self._last_question_at, self._opened_at)
+            in_assignment = self.status.state in ("answering", "opening", "reloading")
+            if in_assignment and time.monotonic() - busy_since < BETWEEN_QUESTIONS:
+                self._sleep(0.5)  # between questions, or the assignment is still loading
+                return
+            self._refresh_assignments()
+            self._show_idle_state()
             self._sleep(1)
             return
 
@@ -234,6 +261,8 @@ class Session:
         if question is None:          # still rendering
             self._sleep(0.5)
             return
+        self._last_question_at = time.monotonic()
+        self._return_home_at = None
 
         now = time.monotonic()
         if question.ident != self._current:
@@ -452,6 +481,77 @@ class Session:
 
     # ---- interstitials -------------------------------------------------
 
+    # ---- choosing an assignment ----------------------------------------
+
+    def request_assignment(self, assignment_id: str) -> str | None:
+        """Ask this session to open one of its listed assignments. Called from the UI/CLI thread;
+        the session thread does the navigation. Returns an error message or None."""
+        if self.status.state not in IDLE_STATES:
+            return f"{self.status.account or self.name} is busy; stop it or wait until it finishes."
+        match = next((a for a in self.status.assignments if a["id"] == assignment_id), None)
+        if match is None:
+            return "That assignment isn't in this account's list any more."
+        if not match["supported"]:
+            return f"{match['kind_label']} assignments aren't supported yet; only Practice."
+        with self._request_lock:
+            self._open_request = (match["url"], match["name"])
+        return None
+
+    def _open_requested(self) -> bool:
+        with self._request_lock:
+            request, self._open_request = self._open_request, None
+        if request is None:
+            return False
+        url, name = request
+        self.log.info("Opening assignment %s", name)
+        self._set("opening", f"Opening {name}")
+        self._finished_seen = False
+        self._current = None
+        self._opened_at = time.monotonic()
+        self._d.get(url)
+        self._sleep(2)
+        return True
+
+    def _refresh_assignments(self) -> None:
+        """Re-read the unfinished assignments while idle: right after sign-in or finishing one,
+        then once a minute. Needs the account to be signed in."""
+        if not self.status.account or self.status.state not in IDLE_STATES + ("starting", "launching"):
+            return
+        now = time.monotonic()
+        if not self._assignments_dirty and now - self._assignments_checked < ASSIGNMENTS_REFRESH:
+            return
+        self._assignments_checked, self._assignments_dirty = now, False
+        try:
+            self._d.set_script_timeout(15)
+            raw = self._d.execute_async_script(assignment_list.FETCH_JS) or {}
+        except WebDriverException as e:
+            self.log.info("Couldn't read assignments: %s", (e.msg or str(e)).splitlines()[0])
+            return
+        items, source = assignment_list.parse(raw)
+        if source == "none":
+            return
+        if source == "cached":
+            self.log.info("Assignment list from the site's cached copy (%s)", raw.get("apiError") or "live list unavailable")
+        self.status.assignments = [a.to_dict() for a in items]
+        self.status.assignments_loaded = True
+
+    def _show_idle_state(self) -> None:
+        if self.status.state == "done":
+            return  # keep "done" until the next assignment starts
+        todo = [a for a in self.status.assignments if a["supported"]]
+        if not self.status.account:
+            self._set_if_changed("waiting", "Sign in to Vocabulary.com in this window")
+        elif not self.status.assignments_loaded:
+            self._set_if_changed("waiting", "Loading assignments")
+        elif todo:
+            self._set_if_changed("choosing", "Choose an assignment")
+        else:
+            self._set_if_changed("waiting", "No practice assignments to do. You can open any practice in this window.")
+
+    def _set_if_changed(self, state: str, detail: str) -> None:
+        if (self.status.state, self.status.detail) != (state, detail):
+            self._set(state, detail)
+
     def _refresh_account_name(self) -> None:
         now = time.monotonic()
         interval = NAME_REFRESH if self.status.account else NAME_REFRESH_UNKNOWN
@@ -466,6 +566,7 @@ class Session:
         if name and name != self.status.account:
             self.log.info("Signed in as %s", name)
             self.store.set_account_name(self.name, name)
+            self._assignments_dirty = True
         self.status.account = name
 
     def _wait_out_blocker(self) -> bool:

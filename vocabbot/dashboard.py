@@ -16,6 +16,8 @@ from .store import Store
 _STATE_STYLE = {
     "answering": "green",
     "waiting": "yellow",
+    "choosing": "bold",
+    "opening": "green",
     "done": "bold green",
     "blocked": "yellow",
     "reloading": "magenta",
