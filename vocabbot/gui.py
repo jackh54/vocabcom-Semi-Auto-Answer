@@ -68,6 +68,12 @@ class Api:
     def open_shared(self, assignment_id):
         return self._ctl.open_shared(str(assignment_id))
 
+    def open_vocabtrainer(self, name):
+        return self._ctl.open_vocabtrainer(str(name))
+
+    def open_vocabtrainer_all(self):
+        return self._ctl.open_vocabtrainer_all()
+
     def new_account_name(self):
         return self._ctl.next_account_name()
 

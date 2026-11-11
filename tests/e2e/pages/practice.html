@@ -1,0 +1,31 @@
+<!doctype html><html><body>
+<div id="slides"></div>
+<button class="next" aria-label="Next question">Next</button>
+<script>
+// Mirrors vocabulary.com's practice page (cdn questions.js): a wrong pick gets class "incorrect" and
+// stops taking clicks; a right pick gets "correct", the question gets "complete", Next becomes active.
+const Q = [
+  {ins: "normal means:", ch: ["n0", "n1", "n2", "n3"], ok: 1},
+  {ins: "stubborn means:", ch: ["s0", "s1", "s2", "s3"], ok: 2},           // the test AI keeps saying s0
+  {ins: "silent means:", ch: ["q0", "q1", "q2", "q3"], ok: 3, silent: true}, // wrong picks get no marker
+  {ins: "premarked means:", ch: ["p0", "p1", "p2", "p3"], ok: 2, pre: [0, 1]}, // already marked wrong (after a reload)
+];
+let i = 0; const next = document.querySelector(".next");
+function show() {
+  if (i >= Q.length) { document.body.insertAdjacentHTML("beforeend", '<div class="practiceComplete activity-summary">done</div>'); return; }
+  const q = Q[i], d = document.createElement("div");
+  d.className = "question";
+  d.innerHTML = `<div class="instructions">${q.ins}</div><div class="choices">${q.ch.map((c, k) =>
+    `<a href="#" data-k="${k}" class="${(q.pre || []).includes(k) ? "incorrect" : ""}">${c}</a>`).join("")}</div>`;
+  d.querySelectorAll("a").forEach(a => {
+    if (a.classList.contains("incorrect")) return;
+    const h = e => { e.preventDefault(); a.removeEventListener("click", h);
+      if (+a.dataset.k === q.ok) { a.classList.add("correct"); d.classList.add("complete"); next.classList.add("active"); }
+      else if (!q.silent) a.classList.add("incorrect"); };
+    a.addEventListener("click", h);
+  });
+  document.getElementById("slides").appendChild(d);
+}
+next.onclick = () => { if (!next.classList.contains("active")) return; next.classList.remove("active"); i++; setTimeout(show, 300); };
+show();
+</script></body></html>

@@ -1,5 +1,6 @@
 """Terminal assignment picker: once the accounts are signed in, offer assignments every account
-shares first, otherwise ask per account. Each session then opens its assignment itself."""
+shares first, otherwise ask per account; VocabTrainer is offered as well. Each session then opens
+its choice itself."""
 from __future__ import annotations
 
 import os
@@ -93,7 +94,8 @@ def _numbered(console: Console, title: str, items: list[dict], tag_ids: Collecti
 
 def _ask(console: Console, prompt: str, count: int, extra: dict[str, str], default: str = "1") -> str:
     """Ask for a number 1..count or one of `extra`'s keys. Returns the answer (lowercase)."""
-    hint = ", ".join([f"1-{count}" if count > 1 else "1"] + [f"{k} {v}" for k, v in extra.items()])
+    numbers = [] if count == 0 else [f"1-{count}" if count > 1 else "1"]
+    hint = ", ".join(numbers + [f"{k} {v}" for k, v in extra.items()])
     while True:
         answer = (Prompt.ask(f"{prompt} [dim]({hint})[/]", default=default, console=console) or "").strip().lower()
         if answer in extra or (answer.isdigit() and 1 <= int(answer) <= count):
@@ -114,7 +116,7 @@ def pick(console: Console, sessions: list[Session], threads: list[threading.Thre
             time.sleep(0.25)
             live.update(_wait_table(sessions, threads))
     if skipped or stop.is_set():
-        console.print("Skipped. Open an assignment in each window and it starts answering.")
+        console.print("Skipped. Open an assignment or VocabTrainer in each window and it starts answering.")
         return
 
     choosers = [s for s, t in zip(sessions, threads)
@@ -124,12 +126,21 @@ def pick(console: Console, sessions: list[Session], threads: list[threading.Thre
     lists = [s.status.assignments for s in choosers]
     shared = shared_ids(lists)
 
-    if shared:
+    if len(choosers) >= 2:
         first = {a["id"]: a for a in lists[0]}
-        options = _numbered(console, f"On all {len(choosers)} accounts", [first[i] for i in shared])
+        if shared:
+            options = _numbered(console, f"On all {len(choosers)} accounts", [first[i] for i in shared])
+        else:
+            options = []
+            console.print(f"No assignment is on all {len(choosers)} accounts.")
         answer = _ask(console, "Start on every account", len(options),
-                      {"p": "pick per account", "s": "skip"})
+                      {"v": "VocabTrainer on all", "p": "pick per account", "s": "skip"},
+                      default="1" if options else "p")
         if answer == "s":
+            return
+        if answer == "v":
+            for s in choosers:
+                _start_vocabtrainer(console, s)
             return
         if answer.isdigit():
             chosen = options[int(answer) - 1]
@@ -141,9 +152,11 @@ def pick(console: Console, sessions: list[Session], threads: list[threading.Thre
         options = _numbered(console, _label(s), s.status.assignments, set(shared))
         if not options:
             console.print(f"[dim]{_label(s)}: no practice assignments to do.[/]")
-            continue
-        answer = _ask(console, f"Start for {_label(s)}", len(options), {"s": "skip"})
-        if answer.isdigit():
+        answer = _ask(console, f"Start for {_label(s)}", len(options), {"v": "VocabTrainer", "s": "skip"},
+                      default="1" if options else "v")
+        if answer == "v":
+            _start_vocabtrainer(console, s)
+        elif answer.isdigit():
             _start(console, s, options[int(answer) - 1])
 
 
@@ -153,3 +166,8 @@ def _start(console: Console, s: Session, assignment: dict) -> None:
         console.print(f"[red]{_label(s)}: {err}[/]")
     else:
         console.print(f"{_label(s)}: opening [bold]{assignment['name']}[/]")
+
+
+def _start_vocabtrainer(console: Console, s: Session) -> None:
+    err = s.request_vocabtrainer()
+    console.print(f"[red]{_label(s)}: {err}[/]" if err else f"{_label(s)}: opening [bold]VocabTrainer[/]")

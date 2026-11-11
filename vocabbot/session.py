@@ -25,16 +25,22 @@ from .config import Config
 from .store import Store, cache_key, normalize
 
 START_URL = "https://www.vocabulary.com/account/activities/"
+VOCABTRAINER_URL = "https://www.vocabulary.com/vocabtrainer/"
 
 # Page selectors (Vocabulary.com markup)
-SEL_QUESTION = ".question"
+# Practice pages use ".question"; VocabTrainer wraps the same question markup in ".box-question".
+SEL_QUESTION = ".question, .box-question"
 SEL_CHOICES = ".choices a"
 SEL_INSTRUCTIONS = ".instructions"
 SEL_SENTENCE = ".sentence"
 SEL_AUDIO_BUTTON = "button.playword.ss-highvolume"
 SEL_SPELLING_INPUT = "input.wordspelling"
 SEL_SPELLING_WORD = "div.sentence.complete strong"
-SEL_NEXT = "button.next.active[aria-label='Next question']"
+SEL_NEXT = "button.next.active[aria-label='Next question'], button.btn-next"
+SEL_FEEDBACK = ".box-feedback-correct, .box-feedback-incorrect"   # VocabTrainer's verdict
+SEL_SURRENDER = "button.surrender"                                 # spelling: reveal the answer
+SEL_LOCKOUT = ".lockout-title"                                     # VocabTrainer "you're rushing" pause
+SEL_LOCKOUT_TIMER = ".lockout-continue-text b"
 SEL_ACHIEVEMENT = ".hero.with-header-padding"
 SEL_ROUND_COMPLETE = "h1 svg.progress-icon"
 SEL_FINISHED = ".practiceComplete.activity-summary"
@@ -223,6 +229,8 @@ class Session:
         self._refresh_account_name()
         if self._open_requested():
             return
+        if self._wait_out_lockout():
+            return
         if self._wait_out_blocker():
             return
 
@@ -248,7 +256,7 @@ class Session:
         if not self._exists(SEL_QUESTION):
             self._current = None
             busy_since = max(self._last_question_at, self._opened_at)
-            in_assignment = self.status.state in ("answering", "opening", "reloading")
+            in_assignment = self.status.state in ("answering", "opening", "reloading", "paused")
             if in_assignment and time.monotonic() - busy_since < BETWEEN_QUESTIONS:
                 self._sleep(0.5)  # between questions, or the assignment is still loading
                 return
@@ -299,10 +307,16 @@ class Session:
         # an earlier attempt before a reload.
         marked = {i for i, link in enumerate(links) if "incorrect" in (link.get_attribute("class") or "").split()}
 
-        if "typeI" in classes or "multiple-image" in classes or el.get_attribute("data-template") == "multiple-image":
-            return Question(el, "image", links=links, marked_wrong=marked) if links else None
+        is_image = ("typeI" in classes or "multiple-image" in classes or "type-image" in classes.split()
+                    or el.get_attribute("data-template") == "multiple-image")
+        if is_image:
+            if not links:
+                return None
+            # The prompt identifies the question across VocabTrainer's redraws (images have no text).
+            prompt = self._text(el, SEL_INSTRUCTIONS).replace("\n", " ")
+            return Question(el, "image", text=prompt, links=links, marked_wrong=marked)
 
-        if el.find_elements(By.CSS_SELECTOR, SEL_AUDIO_BUTTON) and el.find_elements(By.CSS_SELECTOR, SEL_SPELLING_INPUT):
+        if el.find_elements(By.CSS_SELECTOR, SEL_SPELLING_INPUT):
             return Question(el, "spelling")
 
         choices = [link.text.strip() for link in links]
@@ -357,6 +371,8 @@ class Session:
             else:
                 self.log.info("No response to cached answer; trying another choice")
             give_up_on(cached)
+            if self._redrawn(q):
+                return False
         else:
             self._count("cache_misses")
 
@@ -381,13 +397,21 @@ class Session:
             else:
                 self.log.info("No response to %r; treating it as wrong", q.choices[index])
             give_up_on(index)
+            if self._redrawn(q):
+                return False  # VocabTrainer redraws after a wrong pick; re-read it (failed picks are remembered)
         return False
 
     def _answer_image(self, q: Question) -> bool:
         self._set("answering", "Image question - trying each picture")
+        # Pictures that already failed: marked on practice pages; remembered here for VocabTrainer,
+        # which redraws the question after each pick instead of marking the picture.
+        key = f"image|{q.text}|{len(q.links)}"
+        failed = self._failed.setdefault(key, set())
+        if len(failed) >= len(q.links):
+            failed.clear()
         first = True
         for index in range(len(q.links)):
-            if index in q.marked_wrong:
+            if index in q.marked_wrong or str(index) in failed:
                 continue
             result = self._try(q, index, pause=None if first else 0.5)
             first = False
@@ -395,13 +419,25 @@ class Session:
                 return False
             if result == RIGHT:
                 self._count("correct_answers")
+                self._failed.pop(key, None)
                 return True
+            failed.add(str(index))
+            if self._redrawn(q):
+                return False
         return False
 
     def _answer_spelling(self, q: Question) -> bool:
         word_el = q.element.find_elements(By.CSS_SELECTOR, SEL_SPELLING_WORD)
         word = (word_el[0].get_attribute("innerText") or "").strip() if word_el else ""
         if not word:
+            give_up = q.element.find_elements(By.CSS_SELECTOR, SEL_SURRENDER)
+            if give_up and give_up[0].is_displayed() and not self._exists(SEL_NEXT):
+                self._wait_for_turn()
+                self.log.info("Spelling word not shown; using the page's give-up button")
+                give_up[0].click()
+                self._answered()
+                self._count("wrong_answers")
+                return True
             self.log.info("Spelling question without a visible word")
             return False
         self._set("answering", f"Spelling: {word}")
@@ -412,7 +448,7 @@ class Session:
         self._wait_for_turn()
         box.send_keys(word + Keys.RETURN)
         self._answered()
-        if self._await_result(None) == RIGHT:
+        if self._await_result(None, self._latest_feedback()) == RIGHT:
             self._count("correct_answers")
             return True
         return False
@@ -438,6 +474,7 @@ class Session:
             return NOT_CLICKED  # already answered; the next tick clicks Next
 
         link = q.links[index]
+        feedback_before = self._latest_feedback()
         try:
             link.click()
         except WebDriverException as e:
@@ -445,7 +482,7 @@ class Session:
             return NOT_CLICKED
         self._answered()
         label = q.choices[index] if q.choices else f"picture {index + 1}"
-        result = self._await_result(link)
+        result = self._await_result(link, feedback_before)
         self.log.info("Picked %r: %s", label, result)
         return result
 
@@ -460,20 +497,45 @@ class Session:
         self._last_answer = time.monotonic()
         self._schedule_next(self._last_answer)
 
-    def _await_result(self, link: WebElement | None) -> str:
-        """Wait for the site's verdict. It adds class `incorrect` or `correct` to the clicked
-        choice once the server answers, and activates Next when the question is done."""
+    @staticmethod
+    def _redrawn(q: Question) -> bool:
+        """True if the page replaced this question's elements (VocabTrainer redraws after each pick)."""
+        try:
+            q.element.is_enabled()
+            return False
+        except StaleElementReferenceException:
+            return True
+
+    def _latest_feedback(self) -> tuple[str, bool] | None:
+        """VocabTrainer's newest verdict block as (element id, was_correct), or None."""
+        found = self._d.find_elements(By.CSS_SELECTOR, SEL_FEEDBACK)
+        if not found:
+            return None
+        el = found[-1]
+        try:
+            return el.id, "box-feedback-correct" in (el.get_attribute("class") or "")
+        except StaleElementReferenceException:
+            return None
+
+    def _await_result(self, link: WebElement | None, feedback_before: tuple[str, bool] | None = None) -> str:
+        """Wait for the site's verdict. Practice pages add class `incorrect`/`correct` to the
+        clicked choice; VocabTrainer redraws the question with a feedback block. Both show Next
+        once the question is done, but VocabTrainer can show it after a wrong answer too, so
+        the explicit verdicts are checked first."""
         deadline = time.monotonic() + RESULT_TIMEOUT
         while time.monotonic() < deadline and not self.stop.is_set():
             if link is not None:
                 try:
                     classes = (link.get_attribute("class") or "").split()
                 except StaleElementReferenceException:
-                    classes = []  # the page moved on; Next tells us how
+                    classes = []  # the page redrew; the checks below tell us how it went
                 if "incorrect" in classes:
                     return WRONG
                 if "correct" in classes:
                     return RIGHT
+            feedback = self._latest_feedback()
+            if feedback is not None and feedback != feedback_before:
+                return RIGHT if feedback[1] else WRONG
             if self._exists(SEL_NEXT):
                 return RIGHT
             self._sleep(0.2)
@@ -495,6 +557,14 @@ class Session:
             return f"{match['kind_label']} assignments aren't supported yet; only Practice."
         with self._request_lock:
             self._open_request = (match["url"], match["name"])
+        return None
+
+    def request_vocabtrainer(self) -> str | None:
+        """Ask this session to open VocabTrainer. It keeps going until stopped."""
+        if self.status.state not in IDLE_STATES:
+            return f"{self.status.account or self.name} is busy; stop it or wait until it finishes."
+        with self._request_lock:
+            self._open_request = (VOCABTRAINER_URL, "VocabTrainer")
         return None
 
     def _open_requested(self) -> bool:
@@ -546,7 +616,7 @@ class Session:
         elif todo:
             self._set_if_changed("choosing", "Choose an assignment")
         else:
-            self._set_if_changed("waiting", "No practice assignments to do. You can open any practice in this window.")
+            self._set_if_changed("choosing", "No practice assignments to do. Start VocabTrainer instead.")
 
     def _set_if_changed(self, state: str, detail: str) -> None:
         if (self.status.state, self.status.detail) != (state, detail):
@@ -568,6 +638,20 @@ class Session:
             self.store.set_account_name(self.name, name)
             self._assignments_dirty = True
         self.status.account = name
+
+    def _wait_out_lockout(self) -> bool:
+        """VocabTrainer's "Woah, that's fast!" pause. It clears itself when its timer runs out."""
+        if not self._exists(SEL_LOCKOUT):
+            return False
+        timer = self._d.find_elements(By.CSS_SELECTOR, SEL_LOCKOUT_TIMER)
+        left = timer[0].text.strip() if timer else ""
+        if self.status.state != "paused":
+            self.log.info("VocabTrainer paused play for a break%s", f" ({left} left)" if left else "")
+        self._set("paused", "VocabTrainer asked for a break" + (f", continues in {left}" if left else ""))
+        self._current = None
+        self._last_question_at = time.monotonic()  # resuming afterwards is the same session of play
+        self._sleep(5)
+        return True
 
     def _wait_out_blocker(self) -> bool:
         if not self._exists(SEL_BLOCKER):

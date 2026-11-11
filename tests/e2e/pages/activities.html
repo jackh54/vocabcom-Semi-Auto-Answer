@@ -1,0 +1,19 @@
+<!doctype html><html><body><h1>Activities (mock)</h1>
+<script>
+// Mimics what vocabulary.com exposes: the signed-in user cached in localStorage, and the
+// site's API module answering /me/assignments. ?acct=a|b picks the account.
+const acct = new URLSearchParams(location.search).get("acct") || "a";
+const QUIZ = new URL("practice.html", location.href).href;
+const shared = {id: "u8", name: "Unit 8: Persuasion", type: "p", length: 20, class_id: "c1", progress: 0.1,
+  due_at: "2026-11-09T14:59:00Z", visible_at: "2026-11-01T00:00:00Z", url: QUIZ + "?u8"};
+const own = acct === "a"
+  ? [{id: "a-only", name: "Unit 7 review", type: "p", length: 24, class_id: "c1", progress: 0.4, due_at: "2026-11-04T00:00:00Z", url: QUIZ + "?a"},
+     {id: "bee", name: "Unit 8 Spelling Bee", type: "s", length: 20, class_id: "c1", progress: 0, wordlist_id: 55}]
+  : [{id: "b-only", name: "SAT words, set 2", type: "p", length: 30, class_id: "c2", progress: 0, due_at: "2026-11-12T00:00:00Z", url: QUIZ + "?b"}];
+localStorage.setItem("me/auth", JSON.stringify({expires: 0, value: {validUser: true,
+  auth: {loggedin: true, fullname: acct === "a" ? "Test Student A" : "Test Student B"}}}));
+window.modules = {vcom: {api: {remote(path) {
+  const data = {classes: [{id: "c1", name: "Period 3 English"}, {id: "c2", name: "Advisory"}], assignments: [shared, ...own], expires_at: 0};
+  return {then(ok) { setTimeout(() => ok(data), 50); }};
+}}}};
+</script></body></html>

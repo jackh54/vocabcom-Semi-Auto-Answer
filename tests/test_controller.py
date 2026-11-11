@@ -166,3 +166,15 @@ def test_shared_assignments_and_open_shared(ctl, monkeypatch):
     assert ctl.open_shared("u8") is None
     assert sorted(opened) == [("alice", "u8"), ("bob", "u8")]
     assert "No waiting account" in ctl.open_shared("missing")
+
+
+def test_vocabtrainer_all_targets_idle_accounts(ctl, monkeypatch):
+    started = []
+    monkeypatch.setattr(FakeSession, "request_vocabtrainer", lambda self: started.append(self.name) or None, raising=False)
+    ctl.start("alice")
+    ctl.start("bob")
+    _give(ctl, "alice", [])
+    _give(ctl, "bob", [_a("u8")], state="answering")
+    assert ctl.snapshot()["idle_accounts"] == 1
+    assert ctl.open_vocabtrainer_all() is None
+    assert started == ["alice"]

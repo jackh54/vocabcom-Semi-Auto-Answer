@@ -1,0 +1,64 @@
+<!doctype html><html><body class="pg-vocabtrainer">
+<div class="box-trainer-header"><h2 class="hdr-vocab-trainer">VocabTrainer (mock)</h2></div>
+<ul id="play"></ul>
+<script>
+// Mimics VocabTrainer's DOM (from its js3 bundle): li.item-play > .box-question.type-X holding the
+// server question markup; verdicts as .box-feedback-correct / .wrapper-feedback-incorrect > .box-feedback-incorrect;
+// button.btn-next only once there's something to move on to; a "you're rushing" lockout with a countdown.
+const Q = [
+  {kind: "synonym", ins: "keen means:", ch: ["dull", "eager", "slow", "late"], ok: 1},
+  {kind: "synonym", ins: "terse means:", ch: ["long", "kind", "brief", "loud"], ok: 2},   // two wrong -> moves on
+  {kind: "image", ins: "Which picture shows a lighthouse?", ch: ["", "", ""], ok: 2},
+  {kind: "spelling", ins: "Spell the word you hear."},
+  {lockout: 6},
+  {kind: "synonym", ins: "candid means:", ch: ["frank", "sly", "shy", "dim"], ok: 0},
+  {report: true},
+];
+let i = 0, tries = 0;
+const play = document.getElementById("play");
+const keys = ["1A", "2B", "3C", "4D"];
+function next() { i = (i + 1) % Q.length; tries = 0; render(); }
+function nextBtn(li) {
+  const box = document.createElement("div"); box.className = "box-next-btn-below-card";
+  const b = document.createElement("button"); b.className = "btn-next"; b.textContent = "Next";
+  b.onclick = next; box.append(b); li.append(box);
+}
+function feedback(li, good) {
+  if (good) { const d = document.createElement("div"); d.className = "box-feedback-correct"; d.textContent = "Nice job!"; li.append(d); }
+  else { const w = document.createElement("div"); w.className = "wrapper-feedback-incorrect";
+    const d = document.createElement("div"); d.className = "box-feedback-incorrect"; d.textContent = "Sorry, incorrect..."; w.append(d); li.append(w); }
+}
+function render(state) {
+  const q = Q[i]; play.replaceChildren();
+  const li = document.createElement("li"); li.className = "item-play"; play.append(li);
+  if (q.lockout) {
+    const until = Date.now() + q.lockout * 1000;
+    li.innerHTML = '<div class="lockout-background"><h3 class="lockout-title">Woah, that’s fast!</h3><p class="lockout-continue-text"></p></div>';
+    const t = setInterval(() => { const left = Math.max(0, until - Date.now());
+      if (!left) { clearInterval(t); next(); return; }
+      li.querySelector(".lockout-continue-text").innerHTML = `Continue in <b>0:${String(Math.ceil(left / 1000)).padStart(2, "0")}</b>`; }, 250);
+    return;
+  }
+  if (q.report) { li.innerHTML = '<div class="box-progress-report-hdr">Round complete</div>'; nextBtn(li); return; }
+  const wrap = document.createElement("div"); wrap.className = "box-question-mode-points";
+  const box = document.createElement("div"); box.className = `box-question ${q.kind} type-${q.kind}`;
+  wrap.append(box); li.append(wrap);
+  box.insertAdjacentHTML("beforeend", `<div class="instructions">${q.ins}</div>`);
+  if (q.kind === "spelling") {
+    box.insertAdjacentHTML("beforeend", '<div class="sentence">The ____ was loud.</div><form class="form-spelling"><input class="wordspelling"><button class="spellit" type="submit">Spell it</button><button class="surrender" type="button">Show me</button></form>');
+    box.querySelector(".surrender").onclick = () => { feedback(li, false); nextBtn(li); };
+    return;
+  }
+  const choices = document.createElement("div"); choices.className = "choices"; box.append(choices);
+  q.ch.forEach((c, k) => {
+    const a = document.createElement("a"); a.href = "#"; a.setAttribute("accesskey", keys[k]); a.dataset.nonce = "n" + k;
+    a.textContent = c || ("picture " + (k + 1));
+    a.onclick = (e) => { e.preventDefault(); a.classList.add("is-pending");
+      setTimeout(() => { tries++; const good = k === q.ok; render(); const cur = play.querySelector("li");
+        feedback(cur, good); if (good || tries >= 2) nextBtn(cur); }, 300); };
+    choices.append(a);
+  });
+  if (state) state(li);
+}
+render();
+</script></body></html>

@@ -10,6 +10,7 @@ Answers Vocabulary.com assignment questions in Chrome using an answer cache firs
 - **Multiple sessions**: each account gets its own Chrome window and profile, so several assignments or accounts run side by side
 - **Saved accounts**: sign in to Vocabulary.com once per account; the app shows who's signed in to each
 - **Assignment picker**: lists each account's unfinished assignments; one that every account has comes first, with a button to start it on all of them
+- **VocabTrainer**: start [VocabTrainer](https://www.vocabulary.com/vocabtrainer/) on one account or all of them; it keeps going until you stop it
 - **Shared answer cache** (SQLite): an answer learned in one session is reused by all of them, and by later runs
 - Handles multiple-choice, sentence-context, image and spelling questions, countdown blockers, achievements and round screens
 - Answers 3–5 seconds apart (adjustable), moves on after wrong picks, reloads the page if a question gets stuck
@@ -40,7 +41,9 @@ You also need Google Chrome. On Windows the app uses Microsoft Edge WebView2, wh
 4. Start more accounts from the sidebar. When every waiting account has the same assignment, it shows at the top: **Start on all** runs it on each of them. Otherwise pick one per account.
 5. When an assignment finishes, the account goes back to its list for the next one. **Stop** ends one account; closing vocabbot ends them all.
 
-Only Practice assignments are answered automatically; Spelling Bee and Quiz assignments are listed but marked "Not supported". You can still open anything yourself in an account's Chrome window and it answers practice questions it finds.
+Every waiting account also has a **VocabTrainer** row, and with two or more accounts waiting the top strip offers **Start on all** for it too. VocabTrainer has no end, so it runs until you click **Stop**. If VocabTrainer decides you're going too fast it shows a 5-minute "Woah, that's fast!" break; the session shows **Taking a break** with the countdown and carries on when it ends.
+
+Only Practice assignments and VocabTrainer are answered automatically; Spelling Bee and Quiz assignments are listed but marked "Not supported". You can still open anything yourself in an account's Chrome window and it answers practice questions it finds.
 
 **Settings** has the OpenAI model, the gap between answers, your API key, and buttons to open the data and log folders. The app keeps everything in your user folder, so updating is just replacing the app:
 - Mac: `~/Library/Application Support/vocabbot`
@@ -67,7 +70,7 @@ Put your key in `config.json` (or leave it blank and set `OPENAI_API_KEY`). `con
 
 ```bash
 python main.py --gui             # the desktop app
-python main.py                   # terminal version: choose accounts, then assignments (shared ones first)
+python main.py                   # terminal version: choose accounts, then assignments (shared first) or VocabTrainer (v)
 python main.py -a alice -a bob   # run these accounts without the list
 python main.py -n 3              # three sessions named session-1..3
 ```
@@ -115,8 +118,11 @@ On first run, an existing `question_cache.json` and `statistics.json` are import
 ## Development
 
 ```bash
-python -m pytest
+python -m pytest                              # unit tests
+VOCABBOT_E2E=1 python -m pytest tests/e2e     # browser tests: headless Chrome against mock pages (~2 min)
 ```
+
+The browser tests use local copies of the site's markup in `tests/e2e/pages/` (practice quiz, assignments page, VocabTrainer), so they need Chrome but no network or OpenAI key.
 
 When running from source, data lives in the repo folder (`config.json`, `data/`, `logs/`). Set `VOCABBOT_HOME` to use another folder.
 

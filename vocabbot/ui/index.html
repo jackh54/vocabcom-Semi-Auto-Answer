@@ -146,7 +146,7 @@ button, input { font: inherit; color: inherit; }
 }
 .state.answering, .state.opening { color: var(--right); }
 .state.choosing { color: var(--ink); }
-.state.waiting, .state.blocked { color: var(--wait); }
+.state.waiting, .state.blocked, .state.paused { color: var(--wait); }
 .state.done { color: var(--on-highlight); background: var(--highlight); border-color: var(--highlight); }
 .state.error, .state.closed { color: var(--wrong); }
 .word { font-family: var(--serif); font-size: 34px; font-weight: 600; letter-spacing: -.012em; line-height: 1.1; margin: 22px 0 6px; overflow-wrap: anywhere; }
@@ -178,7 +178,7 @@ button, input { font: inherit; color: inherit; }
 .a-meta .late { color: var(--wrong); }
 .alist .btn { grid-row: 1 / span 2; grid-column: 2; }
 .tag { font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 4px; margin-left: 6px; background: var(--mark); color: var(--ink); vertical-align: 1px; }
-.panel .alist { margin-top: 10px; max-height: 196px; overflow-y: auto; }
+.panel .alist { margin-top: 10px; max-height: 250px; overflow-y: auto; }
 .panel .msg.small { font-family: var(--sans); font-size: 14px; color: var(--muted); margin: 14px 0 0; }
 
 /* ---- activity ---- */
@@ -279,7 +279,7 @@ dialog p.lead { color: var(--muted); margin: 0 0 18px; }
         <p>Start an account on the left. Its Chrome window opens on Vocabulary.com; sign in if asked, open an assignment, and it starts answering on its own.</p>
       </div>
       <section class="shared" id="shared" hidden>
-        <h2>Same assignment on every account</h2>
+        <h2>Start on every account</h2>
         <p class="sub" id="shared-sub"></p>
         <ul class="alist" id="shared-list"></ul>
       </section>
@@ -388,6 +388,7 @@ function useMock() {
   api = {
     boot: () => ok({ settings: { has_key: hasKey, key_hint: "…x9Qa", model: "gpt-4o-mini", min_wait: 3, max_wait: 5, home: "~/Library/Application Support/vocabbot", version: "2.1.0" } }),
     poll: (since) => ok({ sessions: sessions(), accounts, events: events.filter(e => e.id > since),
+      idle_accounts: sessions().filter(x => x.state === "choosing").length,
       shared: (() => { const s = sessions().filter(x => x.state === "choosing"); if (s.length < 2) return [];
         const ids = s.map(x => new Set(x.assignments.filter(a => a.supported).map(a => a.id)));
         return s[0].assignments.filter(a => ids.every(set => set.has(a.id))).map(a => ({ ...a, accounts: s.length })); })(),
@@ -399,6 +400,8 @@ function useMock() {
     new_account_name: () => ok(`account-${accounts.length + 1}`),
     open_assignment: (name) => { opened[name] = true; return ok(null); },
     open_shared: () => { accounts.forEach(a => opened[a.name] = true); return ok(null); },
+    open_vocabtrainer: (name) => { opened[name] = true; return ok(null); },
+    open_vocabtrainer_all: () => { accounts.forEach(a => opened[a.name] = true); return ok(null); },
     set_api_key: (k) => { if (!k.startsWith("sk-")) return ok("OpenAI rejected that key. Check it at platform.openai.com/api-keys."); hasKey = true; return ok(null); },
     save_settings: () => ok(null), open_folder: () => ok(null), open_url: (u) => { window.open(u); return ok(null); },
   };
@@ -443,7 +446,7 @@ function ask(title, text, yes) {
     d.addEventListener("close", () => resolve(d.returnValue === "yes"), { once: true });
   });
 }
-const STATE_LABEL = { answering: "Answering", waiting: "Waiting", choosing: "Pick an assignment", opening: "Opening", done: "Done", blocked: "Paused", reloading: "Reloading",
+const STATE_LABEL = { answering: "Answering", waiting: "Waiting", choosing: "Pick an assignment", opening: "Opening", paused: "Taking a break", done: "Done", blocked: "Paused", reloading: "Reloading",
   launching: "Opening Chrome", starting: "Opening Chrome", error: "Error", closed: "Window closed", stopped: "Stopped" };
 const WAITING_TEXT = {
   "Sign in to Vocabulary.com in this window": "Sign in to Vocabulary.com in its Chrome window. Its assignments show up here after that.",
@@ -590,17 +593,19 @@ function renderPanel(s) {
   } else {
     p.dataset.word = "";
     const text = WAITING_TEXT[s.detail] || s.detail || (s.alive ? "" : "This window has closed.");
-    const list = s.alive && IDLE.has(s.state) && !s.stopping ? s.assignments : [];
+    const idle = s.alive && IDLE.has(s.state) && !s.stopping && s.assignments_loaded;
+    const list = idle ? s.assignments : [];
     // Rebuild only when the message or list changes, so clicks aren't lost mid-press.
-    const key = JSON.stringify([text, list.map(a => [a.id, a.pct, sharedIds.has(a.id)])]);
+    const key = JSON.stringify([text, idle, list.map(a => [a.id, a.pct, sharedIds.has(a.id)])]);
     if (p.dataset.body !== key) {
       p.dataset.body = key;
-      const nodes = [el("div", list.length ? "msg small" : "msg", list.length && s.state !== "done" ? "Choose an assignment to start." : text)];
-      if (list.length) {
+      const nodes = [el("div", idle ? "msg small" : "msg", idle && list.length && s.state !== "done" ? "Choose an assignment to start." : text)];
+      if (idle) {
         const ordered = [...list].sort((a, b) => sharedIds.has(b.id) - sharedIds.has(a.id));
         const ul = el("ul", "alist");
         for (const a of ordered)
           ul.append(assignmentItem(a, "Start", () => api.open_assignment(s.name, a.id), sharedIds.has(a.id) ? "All accounts" : ""));
+        ul.append(vocabTrainerItem("Start", () => api.open_vocabtrainer(s.name)));
         nodes.push(ul);
       }
       body.replaceChildren(...nodes);
@@ -614,18 +619,30 @@ function renderPanel(s) {
   else { btn.textContent = "Clear"; btn.disabled = false; btn.onclick = () => act(api.dismiss(s.name)); }
 }
 
+const VOCABTRAINER = { id: "vocabtrainer", name: "VocabTrainer", kind_label: "Adaptive practice", supported: true };
+const VT_META = "Adaptive practice, keeps going until you stop it";
+
 let sharedKey = "";
-function renderShared(shared) {
+function renderShared(shared, idle) {
   sharedIds = new Set(shared.map(a => a.id));
-  const key = JSON.stringify(shared.map(a => [a.id, a.pct, a.accounts]));
+  const key = JSON.stringify([idle, shared.map(a => [a.id, a.pct])]);
   if (key === sharedKey) return;
   sharedKey = key;
-  $("shared").hidden = shared.length === 0;
-  if (!shared.length) return;
-  const n = shared[0].accounts;
-  $("shared-sub").textContent = `Each of your ${n} waiting accounts still has ${shared.length === 1 ? "this one" : "these"} to do. Start it on all of them at once, or pick per account below.`;
+  $("shared").hidden = idle < 2;
+  if (idle < 2) return;
+  $("shared-sub").textContent = shared.length
+    ? `Assignments all ${idle} waiting accounts still have come first. Or pick per account below.`
+    : `No assignment is shared by all ${idle} waiting accounts; pick one per account below, or practice in VocabTrainer on all of them.`;
   const ul = $("shared-list"); ul.replaceChildren();
-  for (const a of shared) ul.append(assignmentItem(a, `Start on all ${n}`, () => api.open_shared(a.id)));
+  for (const a of shared) ul.append(assignmentItem(a, `Start on all ${idle}`, () => api.open_shared(a.id)));
+  ul.append(vocabTrainerItem(`Start on all ${idle}`, () => api.open_vocabtrainer_all()));
+}
+
+function vocabTrainerItem(label, onStart) {
+  const li = assignmentItem(VOCABTRAINER, label, onStart);
+  li.querySelector(".a-meta").textContent = VT_META;
+  li.querySelector(".btn").className = "btn";  // secondary: assignments come first
+  return li;
 }
 
 function renderSessions(sessions) {
@@ -656,7 +673,7 @@ function renderFeed(events) {
 async function poll() {
   try {
     const st = await api.poll(lastEvent);
-    renderTotals(st.totals); renderAccounts(st.accounts); renderShared(st.shared || []); renderSessions(st.sessions);
+    renderTotals(st.totals); renderAccounts(st.accounts); renderShared(st.shared || [], st.idle_accounts || 0); renderSessions(st.sessions);
     if (st.events.length) { lastEvent = st.events[st.events.length - 1].id; renderFeed(st.events); }
     else if (!feedItems.length) renderFeed([]);
   } catch (e) { console.error(e); }
