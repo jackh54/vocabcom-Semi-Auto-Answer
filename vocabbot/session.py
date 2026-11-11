@@ -317,7 +317,8 @@ class Session:
             return Question(el, "image", text=prompt, links=links, marked_wrong=marked)
 
         if el.find_elements(By.CSS_SELECTOR, SEL_SPELLING_INPUT):
-            return Question(el, "spelling")
+            # VocabTrainer spelling shows a definition sentence with the word blanked out.
+            return Question(el, "spelling", text=self._text(el, SEL_SENTENCE).replace("\n", " "))
 
         choices = [link.text.strip() for link in links]
         if not choices or not all(choices):
@@ -426,32 +427,85 @@ class Session:
                 return False
         return False
 
+    MAX_SPELLING_GUESSES = 3
+
     def _answer_spelling(self, q: Question) -> bool:
-        word_el = q.element.find_elements(By.CSS_SELECTOR, SEL_SPELLING_WORD)
-        word = (word_el[0].get_attribute("innerText") or "").strip() if word_el else ""
-        if not word:
-            give_up = q.element.find_elements(By.CSS_SELECTOR, SEL_SURRENDER)
-            if give_up and give_up[0].is_displayed() and not self._exists(SEL_NEXT):
-                self._wait_for_turn()
-                self.log.info("Spelling word not shown; using the page's give-up button")
-                give_up[0].click()
-                self._answered()
-                self._count("wrong_answers")
-                return True
-            self.log.info("Spelling question without a visible word")
-            return False
-        self._set("answering", f"Spelling: {word}")
+        """Practice pages show the word in the sentence. VocabTrainer only plays it as audio and
+        shows a definition sentence with the word blanked, so the word comes from the answer cache
+        or the AI; GIVE UP (shown after a wrong try) is the last resort."""
         if self._exists(SEL_NEXT):
             return False
+        shown = q.element.find_elements(By.CSS_SELECTOR, SEL_SPELLING_WORD)
+        word = (shown[0].get_attribute("innerText") or "").strip() if shown else ""
+        from_cache = False
+        failed = self._failed.setdefault(f"spell|{q.text}", set())
+        if not word and q.text:
+            cached = self.store.lookup_spelling(q.text)
+            if cached and cached not in failed:
+                word, from_cache = cached, True
+            elif len(failed) < self.MAX_SPELLING_GUESSES:
+                word = self._ask_ai_spelling(q.text, failed) or ""
+        if not word:
+            return self._give_up_spelling(q)
+
+        self._set("answering", f"Spelling: {word}")
         box = q.element.find_element(By.CSS_SELECTOR, SEL_SPELLING_INPUT)
-        box.clear()
+        feedback_before = self._latest_feedback()
         self._wait_for_turn()
+        box.clear()
         box.send_keys(word + Keys.RETURN)
         self._answered()
-        if self._await_result(None, self._latest_feedback()) == RIGHT:
+        result = self._await_result(None, feedback_before)
+        self.log.info("Spelled %r: %s", word, result)
+        if result == RIGHT:
             self._count("correct_answers")
+            if from_cache:
+                self._count("cache_hits")
+            if q.text:
+                self.store.remember_spelling(q.text, word)
+            self._failed.pop(f"spell|{q.text}", None)
             return True
-        return False
+        if result == WRONG:
+            self._count("wrong_answers")
+            if from_cache:
+                self.store.forget_spelling(q.text)
+        failed.add(word)
+        return False  # the next tick re-reads the question (VocabTrainer redraws it)
+
+    def _ask_ai_spelling(self, sentence: str, exclude: set[str]) -> str | None:
+        self.status.ai_calls += 1
+        try:
+            return self.answerer.spell(sentence, exclude)
+        except openai.OpenAIError as e:
+            self.log.warning("OpenAI request failed: %s", e)
+            return None
+
+    def _give_up_spelling(self, q: Question) -> bool:
+        give_up = q.element.find_elements(By.CSS_SELECTOR, SEL_SURRENDER)
+        if not (give_up and give_up[0].is_displayed()):
+            return False  # GIVE UP appears after a wrong try; stuck detection reloads if it never does
+        self._wait_for_turn()
+        self.log.info("Couldn't spell it; using the page's GIVE UP button")
+        give_up[0].click()
+        self._answered()
+        self._count("wrong_answers")
+        self._sleep(1.5)
+        revealed = self._revealed_word()
+        if revealed and q.text:
+            self.store.remember_spelling(q.text, revealed)
+            self.log.info("Saved the revealed spelling %r", revealed)
+        return True
+
+    def _revealed_word(self) -> str | None:
+        """After GIVE UP the page shows the answer; read it so this sentence is right next time."""
+        for selector in ("div.sentence.complete strong", ".box-question .sentence strong", ".box-feedback-incorrect strong",
+                         ".box-question .word", ".box-question strong"):
+            found = self._d.find_elements(By.CSS_SELECTOR, selector)
+            if found:
+                text = (found[-1].get_attribute("innerText") or "").strip()
+                if text and len(text) <= 64:
+                    return text.lower()
+        return None
 
     def _ask_ai(self, q: Question, exclude: set[int]) -> int | None:
         self.status.ai_calls += 1

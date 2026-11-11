@@ -31,6 +31,23 @@ def parse_choice(reply: str | None, n_choices: int, exclude: Collection[int] = (
     return None
 
 
+_WORD = re.compile(r"^[a-z][a-z' -]{0,63}$")
+_SPELL_SYSTEM = (
+    "You fill in vocabulary blanks. The same word or phrase was removed everywhere the text shows "
+    "________. Reply with only that missing word or phrase, spelled correctly, in lowercase, nothing else."
+)
+
+
+def clean_word(reply: str | None, exclude: Collection[str] = ()) -> str | None:
+    """The model's spelling answer as a plain lowercase word/phrase, or None if unusable."""
+    line = (reply or "").strip().splitlines()[0] if (reply or "").strip() else ""
+    word = line.strip().strip("\"'`.,!:;*").strip().lower()
+    word = " ".join(word.split())
+    if not _WORD.match(word) or word in {w.lower() for w in exclude}:
+        return None
+    return word
+
+
 class Answerer:
     """Thread-safe: one instance is shared by every session."""
 
@@ -41,6 +58,19 @@ class Answerer:
     def check(self) -> None:
         """Fail fast on a bad key or model name. Free: it does not run a completion."""
         self._client.models.retrieve(self.model)
+
+    def spell(self, sentence: str, exclude: Collection[str] = ()) -> str | None:
+        """Guess the blanked-out word in a spelling question's definition sentence.
+        Raises openai.OpenAIError on API failure."""
+        prompt = sentence
+        if exclude:
+            prompt += "\n\nThese answers are wrong, give a different one: " + ", ".join(sorted(exclude))
+        response = self._client.chat.completions.create(
+            model=self.model,
+            messages=[{"role": "system", "content": _SPELL_SYSTEM}, {"role": "user", "content": prompt}],
+        )
+        reply = response.choices[0].message.content if response.choices else ""
+        return clean_word(reply, exclude)
 
     def choose(self, question: str, choices: list[str], exclude: Collection[int] = ()) -> int | None:
         """0-based index of the model's pick, or None if the reply had no usable number.

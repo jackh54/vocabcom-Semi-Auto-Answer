@@ -9,7 +9,8 @@ const Q = [
   {kind: "synonym", ins: "keen means:", ch: ["dull", "eager", "slow", "late"], ok: 1},
   {kind: "synonym", ins: "terse means:", ch: ["long", "kind", "brief", "loud"], ok: 2},   // two wrong -> moves on
   {kind: "image", ins: "Which picture shows a lighthouse?", ch: ["", "", ""], ok: 2},
-  {kind: "spelling", ins: "Spell the word you hear."},
+  {kind: "spelling", word: "tiny", sentence: "Something ________ is very small. The kitten was ________."},
+  {kind: "spelling", word: "zephyr", sentence: "A ________ is a gentle breeze. A warm ________ came off the sea."},
   {lockout: 6},
   {kind: "synonym", ins: "candid means:", ch: ["frank", "sly", "shy", "dim"], ok: 0},
   {report: true},
@@ -45,8 +46,22 @@ function render(state) {
   wrap.append(box); li.append(wrap);
   box.insertAdjacentHTML("beforeend", `<div class="instructions">${q.ins}</div>`);
   if (q.kind === "spelling") {
-    box.insertAdjacentHTML("beforeend", '<div class="sentence">The ____ was loud.</div><form class="form-spelling"><input class="wordspelling"><button class="spellit" type="submit">Spell it</button><button class="surrender" type="button">Show me</button></form>');
-    box.querySelector(".surrender").onclick = () => { feedback(li, false); nextBtn(li); };
+    // Live markup: the word is only spoken; the sentence is a definition with the word blanked.
+    // GIVE UP is hidden until a wrong try; after giving up the answer is shown.
+    box.className = "box-question spelling type-t";
+    box.innerHTML = `<div class="questionContent"><div class="sentence blanked">${q.sentence}</div></div>
+      <div class="spelltheword"><div class="label">Spell the word:</div><form class="form-spelling">
+      <div class="field left"><button class="playword ss-highvolume right" type="button"><span>PLAY</span></button>
+      <input type="text" class="wordspelling" maxlength="64"></div><div class="field right">
+      <button class="spellit ss-write left" type="submit">SPELL IT</button>
+      <button class="surrender ss-flag left" type="button" style="display:${tries ? "inline-block" : "none"}">GIVE UP</button></div></form></div>`;
+    box.querySelector("form").onsubmit = (e) => { e.preventDefault();
+      const typed = box.querySelector("input").value.trim().toLowerCase();
+      setTimeout(() => { tries++; const good = typed === q.word; render(); const cur = play.querySelector("li");
+        feedback(cur, good); if (good) nextBtn(cur); }, 300); };
+    box.querySelector(".surrender").onclick = () => {
+      play.querySelector(".sentence").outerHTML = `<div class="sentence complete">The answer: <strong>${q.word}</strong></div>`;
+      feedback(li, false); nextBtn(li); };
     return;
   }
   const choices = document.createElement("div"); choices.className = "choices"; box.append(choices);

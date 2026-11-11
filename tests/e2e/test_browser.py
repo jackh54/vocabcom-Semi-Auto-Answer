@@ -21,6 +21,15 @@ PAGES = Path(__file__).parent / "pages"
 
 
 class FirstUntriedAI:
+    SPELLINGS = {"small": ["small", "tiny"],            # wrong first, then right
+                 "breeze": ["wind", "breeze", "gust"]}  # never right: ends with GIVE UP
+
+    def spell(self, sentence, exclude=()):
+        for clue, guesses in self.SPELLINGS.items():
+            if clue in sentence:
+                return next((g for g in guesses if g not in exclude), None)
+        return None
+
     def choose(self, question, choices, exclude=()):
         if question.startswith("stubborn"):
             return 0  # keeps repeating a wrong answer, like a stubborn model
@@ -100,7 +109,7 @@ class Picks(logging.Handler):
 
     def emit(self, record):
         msg = record.getMessage()
-        if msg.startswith("Picked") or "give-up" in msg:
+        if msg.startswith(("Picked", "Spelled", "Couldn't spell", "Saved the revealed")):
             self.lines.append(msg)
         elif msg.startswith("VocabTrainer paused"):
             self.lines.append("VocabTrainer paused")  # countdown text varies
@@ -120,15 +129,19 @@ def test_vocabtrainer(make_session, monkeypatch):
     def seen(text):
         return any(text in line for line in picks.lines)
     # Round 1, then into round 2 (the mock loops after its round report).
-    assert wait_for(lambda: seen("'picture 3': right"), 150), picks.lines
+    assert wait_for(lambda: seen("Spelled 'zephyr': right"), 180), picks.lines
     first_round = picks.lines[: next(i for i, l in enumerate(picks.lines) if "'frank'" in l) + 1]
     assert first_round == [
         "Picked 'dull': wrong", "Picked 'eager': right",             # retry after a wrong pick
         "Picked 'long': wrong", "Picked 'kind': wrong",              # Next after a wrong answer isn't "right"
         "Picked 'picture 1': wrong", "Picked 'picture 2': wrong",    # failed pictures remembered across redraws
-        "Spelling word not shown; using the page's give-up button",
+        "Spelled 'small': wrong", "Spelled 'tiny': right",           # spelling from the blanked sentence via AI
+        "Spelled 'wind': wrong", "Spelled 'breeze': wrong", "Spelled 'gust': wrong",   # 3 wrong guesses...
+        "Couldn't spell it; using the page's GIVE UP button",
+        "Saved the revealed spelling 'zephyr'",
         "VocabTrainer paused",                                       # waits out the "you're rushing" pause
         "Picked 'frank': right",
     ], picks.lines
     second_round = picks.lines[len(first_round):]
-    assert second_round[:3] == ["Picked 'eager': right", "Picked 'brief': right", "Picked 'picture 3': right"], picks.lines
+    assert second_round[:5] == ["Picked 'eager': right", "Picked 'brief': right", "Picked 'picture 3': right",
+                                "Spelled 'tiny': right", "Spelled 'zephyr': right"], picks.lines   # from saved answers

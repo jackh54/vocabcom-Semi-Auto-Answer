@@ -94,6 +94,28 @@ class Store:
         with self._lock:
             self._db.execute("DELETE FROM answers WHERE key = ?", (cache_key(question, choices),))
 
+    # ---- spelling (VocabTrainer: the word is heard, not shown) -----------
+
+    @staticmethod
+    def _spell_key(sentence: str) -> str:
+        return "spell|" + normalize(sentence)
+
+    def lookup_spelling(self, sentence: str) -> str | None:
+        key = self._spell_key(sentence)
+        with self._lock:
+            row = self._db.execute("SELECT answer FROM answers WHERE key = ?", (key,)).fetchone()
+            if row:
+                self._db.execute("UPDATE answers SET last_used = ?, times_used = times_used + 1 WHERE key = ?",
+                                 (time.time(), key))
+        return row[0] if row else None
+
+    def remember_spelling(self, sentence: str, word: str) -> None:
+        self._upsert(self._spell_key(sentence), word.strip().lower(), sentence, [])
+
+    def forget_spelling(self, sentence: str) -> None:
+        with self._lock:
+            self._db.execute("DELETE FROM answers WHERE key = ?", (self._spell_key(sentence),))
+
     def answer_count(self) -> int:
         with self._lock:
             return self._db.execute("SELECT COUNT(*) FROM answers").fetchone()[0]

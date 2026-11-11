@@ -63,3 +63,13 @@ def test_account_names_upsert(tmp_path):
     store.set_account_name("session-1", "New Name")
     store.set_account_name("session-2", "Other")
     assert store.account_names() == {"session-1": "New Name", "session-2": "Other"}
+
+
+def test_spelling_answers(tmp_path):
+    store = Store(tmp_path / "db.sqlite")
+    sentence = "A ________ is a gentle breeze."
+    assert store.lookup_spelling(sentence) is None
+    store.remember_spelling(sentence, "Zephyr")
+    assert store.lookup_spelling("a ________ is a gentle breeze") == "zephyr"   # punctuation/case don't matter
+    store.forget_spelling(sentence)
+    assert store.lookup_spelling(sentence) is None
