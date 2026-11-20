@@ -18,6 +18,7 @@ _STATE_STYLE = {
     "waiting": "yellow",
     "choosing": "bold",
     "opening": "green",
+    "jam": "green",
     "done": "bold green",
     "blocked": "yellow",
     "reloading": "magenta",

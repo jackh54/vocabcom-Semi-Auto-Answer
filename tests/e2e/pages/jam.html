@@ -1,0 +1,75 @@
+<!doctype html><html><head><style>.questionpane a { display: inline-block; width: 60px; height: 40px; }</style></head>
+<body class="jam loading"><main></main>
+<script>
+// Mirrors vocabulary.com's Vocab Jam page (cdn js/vcom/jam/jam.js, markup read from a live public Jam):
+// the body's classes carry the game state, each question is a section.turn[data-turn] whose question
+// is ".questionpane > .question.active" while it takes answers, one click locks the answer in
+// (body.answer_locked), and the reveal marks every choice "revealed correct" or "revealed incorrect".
+// Round 1 asks players to pick a team; when it ends it "rematches" into round 2 with a new code.
+const params = new URLSearchParams(location.search);
+const code = params.get("code"), round = +(params.get("round") || 1);
+const body = document.body, main = document.querySelector("main");
+if (code === "000000") {   // unknown code: the site shows its code-entry page instead
+  body.className = "dialog jam-home";
+  body.innerHTML = '<form class="joinpanel"><input><button class="join">Join the Jam</button></form>';
+} else {
+  body.dataset.code = round === 1 ? code : "222222";
+  const width = round === 1 ? 400 : 250;   // the page asks for pictures sized to the window
+  const Q = [
+    {html: `<div class="instructions">jam-a means:</div><div class="choices">${["a0", "a1", "a2", "a3"].map(c => `<a href="javascript:void(0)">${c}</a>`).join("")}</div>`, kind: "typeS", ok: 1},
+    {html: `<div class="instructions">Which picture shows a jam?</div><div class="choices">${[1, 2, 3, 4].map(n => `<a href="javascript:void(0)" style="background-image:url('pic${n}.jpg?w=${width}')"></a>`).join("")}</div>`, kind: "typeI", ok: 2},
+    {html: `<div class="instructions">jam-b means:</div><div class="choices">${["b0", "b1", "b2", "b3"].map(c => `<a href="javascript:void(0)">${c}</a>`).join("")}</div>`, kind: "typeS", ok: 0},
+  ];
+  const later = (ms) => new Promise(r => setTimeout(r, ms));
+  const state = (s) => { body.classList.remove("state_setup", "state_inprogress", "state_interstitial", "state_complete", "state_countdown"); body.classList.add(...s.split(" ")); };
+  const current = (section) => { main.querySelectorAll("section.current").forEach(x => x.classList.replace("current", "past")); section.classList.add("current"); main.append(section); };
+  let joined;
+  const member = new Promise(r => joined = r);
+  (async () => {
+    await later(300);
+    body.classList.remove("loading");
+    body.classList.add("connected", "viewer", "timed", "teams_2");
+    state("state_setup");
+    const setup = document.createElement("section"); setup.className = "setup"; setup.textContent = "Waiting for your host"; current(setup);
+    const join = () => { body.classList.replace("viewer", "member"); joined(); };
+    if (round === 1) {
+      const dialog = document.createElement("div");
+      dialog.className = "dialogpane";
+      dialog.innerHTML = '<div class="dialog"><p>Please choose a team to join:</p><div class="actions"><button data-team="0">Team Red</button><button data-team="1">Team Blue</button></div></div>';
+      dialog.addEventListener("click", (e) => { if (e.target.dataset.team) { dialog.remove(); join(); } });
+      body.append(dialog);
+    } else join();
+    await member;
+    await later(1000);
+    for (let t = 0; t < Q.length; t++) {
+      state("state_interstitial state_countdown");
+      const ready = document.createElement("section"); ready.className = "getready"; ready.textContent = "Get Ready!"; current(ready);
+      await later(800);
+      state("state_inprogress");
+      const turn = document.createElement("section");
+      turn.className = "turn inprogress"; turn.dataset.turn = t;
+      turn.innerHTML = `<div class="questionpane vcom-challenge"><div class="status"></div><div class="question ${Q[t].kind} active">${Q[t].html}</div></div>`;
+      const links = [...turn.querySelectorAll(".choices a")];
+      links.forEach(a => a.addEventListener("click", () => {
+        if (!turn.querySelector(".active")) return;
+        turn.querySelector(".question").classList.remove("active");
+        a.classList.add("selected"); body.classList.add("answer_locked");
+      }));
+      current(turn);
+      await later(4000);
+      turn.querySelector(".question").classList.remove("active");
+      turn.classList.remove("inprogress");
+      body.classList.remove("answer_locked");
+      state("state_interstitial");
+      await later(600);
+      links.forEach((a, k) => { if (k !== Q[t].ok) a.classList.add("revealed", "incorrect"); });
+      await later(600);
+      links[Q[t].ok].classList.add("revealed", "correct");
+      await later(800);
+    }
+    state("state_complete");
+    const summary = document.createElement("section"); summary.className = "gamesummary"; summary.textContent = "Thanks for Jamming!"; current(summary);
+    if (round === 1) { await later(2500); location.href = location.pathname + `?code=${code}&round=2`; }
+  })();
+}
+</script></body></html>

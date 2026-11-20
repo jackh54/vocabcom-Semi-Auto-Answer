@@ -145,3 +145,42 @@ def test_vocabtrainer(make_session, monkeypatch):
     second_round = picks.lines[len(first_round):]
     assert second_round[:5] == ["Picked 'eager': right", "Picked 'brief': right", "Picked 'picture 3': right",
                                 "Spelled 'tiny': right", "Spelled 'zephyr': right"], picks.lines   # from saved answers
+
+
+def test_vocab_jam(make_session, monkeypatch):
+    from vocabbot import session as S
+
+    lines: list[str] = []
+
+    class JamLog(logging.Handler):
+        def emit(self, record):
+            msg = record.getMessage()
+            if msg.startswith(("Joining", "Joined", "Picked", "Saved the revealed", "Jam finished", "No Vocab Jam")):
+                lines.append("Joining a team" if msg.startswith("Joining") else msg)
+
+    logging.getLogger("vocabbot.session.jam").addHandler(JamLog(logging.INFO))
+    logging.getLogger("vocabbot").setLevel(logging.INFO)
+    monkeypatch.setattr(S, "JAM_URL", (PAGES / "jam.html").as_uri() + "?code={code}")
+    s = make_session("jam", "activities.html", "acct=a")
+    assert wait_for(lambda: s.status.state == "choosing", 60)
+    assert "6-digit" in s.request_jam("12345")
+    assert s.request_jam("111-111") is None
+
+    # Round 1 (pick a team), then the rematch with a new code answers from what round 1 revealed.
+    assert wait_for(lambda: lines.count("Jam finished") == 2, 120), lines
+    assert lines == [
+        "Joining a team", "Joined Vocab Jam 111-111",
+        "Picked 'a0': wrong",                         # one try per question: the AI's first pick
+        "Saved the revealed answer: picture 3",       # no saved answer for a picture: skipped, then learned
+        "Picked 'b0': right",
+        "Jam finished",
+        "Joined Vocab Jam 222-222",
+        "Picked 'a1': right", "Picked 'picture 3': right", "Picked 'b0': right",   # from saved answers
+        "Jam finished",
+    ], lines
+    assert (s.status.correct, s.status.wrong, s.status.cache_hits, s.status.assignments_done) == (4, 1, 3, 2)
+    assert s.status.state == "done"
+
+    assert s.request_jam("000-000") is None
+    assert wait_for(lambda: s.status.detail.startswith("No Vocab Jam has the code 000-000"), 30), s.status
+    assert s.status.state == "choosing"

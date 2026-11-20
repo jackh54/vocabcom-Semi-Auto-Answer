@@ -1,6 +1,6 @@
 """Terminal assignment picker: once the accounts are signed in, offer assignments every account
-shares first, otherwise ask per account; VocabTrainer is offered as well. Each session then opens
-its choice itself."""
+shares first, otherwise ask per account; VocabTrainer and Vocab Jam are offered as well. Each
+session then opens its choice itself."""
 from __future__ import annotations
 
 import os
@@ -19,7 +19,7 @@ from rich.table import Table
 from rich.text import Text
 
 from .assignments import shared_ids
-from .session import IDLE_STATES, Session
+from .session import IDLE_STATES, Session, jam_code
 
 
 def _label(s: Session) -> str:
@@ -28,7 +28,7 @@ def _label(s: Session) -> str:
 
 def _ready(s: Session, thread: threading.Thread) -> bool:
     st = s.status
-    return (not thread.is_alive() or st.state in ("answering", "error", "closed")
+    return (not thread.is_alive() or st.state in ("answering", "jam", "error", "closed")
             or (st.state in IDLE_STATES and st.assignments_loaded))
 
 
@@ -134,13 +134,18 @@ def pick(console: Console, sessions: list[Session], threads: list[threading.Thre
             options = []
             console.print(f"No assignment is on all {len(choosers)} accounts.")
         answer = _ask(console, "Start on every account", len(options),
-                      {"v": "VocabTrainer on all", "p": "pick per account", "s": "skip"},
+                      {"v": "VocabTrainer on all", "j": "Vocab Jam on all", "p": "pick per account", "s": "skip"},
                       default="1" if options else "p")
         if answer == "s":
             return
         if answer == "v":
             for s in choosers:
                 _start_vocabtrainer(console, s)
+            return
+        if answer == "j":
+            code = _ask_jam_code(console)
+            for s in choosers:
+                _start_jam(console, s, code)
             return
         if answer.isdigit():
             chosen = options[int(answer) - 1]
@@ -152,10 +157,12 @@ def pick(console: Console, sessions: list[Session], threads: list[threading.Thre
         options = _numbered(console, _label(s), s.status.assignments, set(shared))
         if not options:
             console.print(f"[dim]{_label(s)}: no practice assignments to do.[/]")
-        answer = _ask(console, f"Start for {_label(s)}", len(options), {"v": "VocabTrainer", "s": "skip"},
+        answer = _ask(console, f"Start for {_label(s)}", len(options), {"v": "VocabTrainer", "j": "Vocab Jam", "s": "skip"},
                       default="1" if options else "v")
         if answer == "v":
             _start_vocabtrainer(console, s)
+        elif answer == "j":
+            _start_jam(console, s, _ask_jam_code(console))
         elif answer.isdigit():
             _start(console, s, options[int(answer) - 1])
 
@@ -171,3 +178,16 @@ def _start(console: Console, s: Session, assignment: dict) -> None:
 def _start_vocabtrainer(console: Console, s: Session) -> None:
     err = s.request_vocabtrainer()
     console.print(f"[red]{_label(s)}: {err}[/]" if err else f"{_label(s)}: opening [bold]VocabTrainer[/]")
+
+
+def _ask_jam_code(console: Console) -> str:
+    while True:
+        code = jam_code(Prompt.ask("Jam code from the host [dim](like 123-456)[/]", console=console) or "")
+        if code:
+            return code
+        console.print("[red]A Jam code is 6 digits.[/]")
+
+
+def _start_jam(console: Console, s: Session, code: str) -> None:
+    err = s.request_jam(code)
+    console.print(f"[red]{_label(s)}: {err}[/]" if err else f"{_label(s)}: joining [bold]Vocab Jam {code[:3]}-{code[3:]}[/]")

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import random
+import re
 import threading
 import time
 from dataclasses import dataclass, field
@@ -26,6 +27,7 @@ from .store import Store, cache_key, normalize
 
 START_URL = "https://www.vocabulary.com/account/activities/"
 VOCABTRAINER_URL = "https://www.vocabulary.com/vocabtrainer/"
+JAM_URL = "https://www.vocabulary.com/jam/{code}"
 
 # Page selectors (Vocabulary.com markup)
 # Practice pages use ".question"; VocabTrainer wraps the same question markup in ".box-question".
@@ -46,6 +48,16 @@ SEL_ROUND_COMPLETE = "h1 svg.progress-icon"
 SEL_FINISHED = ".practiceComplete.activity-summary"
 SEL_BLOCKER = "div.blocker"
 SEL_COUNTDOWN = "div.blocker .countdown"
+
+# Vocab Jam (cdn js/vcom/jam/jam.js). The body's classes carry the game state; each question is a
+# section.turn[data-turn] holding the usual question markup, and the newest one is "current".
+SEL_JAM = "body.jam[data-code]"
+SEL_JAM_JOIN = "form.joinpanel"                               # code-entry page: the code wasn't found
+SEL_JAM_TEAMS = ".dialogpane .actions button[data-team]"      # host lets players pick a team
+SEL_JAM_LOGIN = ".dialogpane.login"                           # signed out
+SEL_JAM_TURN = "section.turn.current"
+SEL_JAM_OPEN = ".questionpane > .active"                      # the question still takes an answer
+SEL_JAM_CORRECT = ".choices a.revealed.correct"
 
 # Vocabulary.com caches the signed-in user in localStorage["me/auth"]; read just the name.
 _ACCOUNT_NAME_JS = """
@@ -69,6 +81,27 @@ RESULT_TIMEOUT = 6.0   # seconds to wait for the page to mark an answer right or
 
 # Outcomes of clicking a choice
 RIGHT, WRONG, NO_RESULT, NOT_CLICKED = "right", "wrong", "no response", "not clicked"
+
+JAM_OPEN_TIMEOUT = 20.0   # seconds for a requested Jam page to show up before giving up
+
+
+def jam_code(text: str) -> str | None:
+    """The 6 digits of a Jam code as the host shows it ("123-456"), or None if it isn't one."""
+    match = re.fullmatch(r"(\d{3})[\s-]?(\d{3})", text.strip(), re.ASCII)
+    return match.group(1) + match.group(2) if match else None
+
+
+@dataclass
+class JamPick:
+    """What this session answered on one Jam question, kept until the answer is revealed."""
+    text: str
+    choices: list[str]
+    index: int | None      # None: skipped (no saved answer for a picture question, or no AI answer)
+    pictures: bool = False  # choices are image addresses
+    from_cache: bool = False
+
+    def label(self, index: int) -> str:
+        return f"picture {index + 1}" if self.pictures else self.choices[index]
 
 
 @dataclass
@@ -130,9 +163,15 @@ class Session:
         self._last_question_at = 0.0
         self._opened_at = 0.0
         self._return_home_at: float | None = None
-        self._open_request: tuple[str, str] | None = None  # (url, name) chosen from the app or CLI
+        self._open_request: tuple[str, str, str | None] | None = None  # (url, name, jam code) chosen from the app or CLI
         self._request_lock = threading.Lock()
         self._failed: dict[str, set[str]] = {}  # cache key -> normalized choices that failed
+        self._jam_requested: str | None = None   # Jam code asked for and not on screen yet
+        self._jam_code = ""                      # Jam on screen; a rematch gets a new code
+        self._jam_joined = False
+        self._jam_turn: str | None = None        # data-turn of the Jam question last seen open
+        self._jam_picks: dict[str, JamPick] = {}  # data-turn -> what was answered, until revealed
+        self._notice = ""                        # shown instead of "Choose an assignment" until the next request
 
     # ---- lifecycle -----------------------------------------------------
 
@@ -229,6 +268,12 @@ class Session:
         self._refresh_account_name()
         if self._open_requested():
             return
+        if self._exists(SEL_JAM):
+            self._jam_requested = None
+            self._jam_tick()
+            return
+        if self._jam_requested and self._jam_not_found(self._jam_requested):
+            return
         if self._wait_out_lockout():
             return
         if self._wait_out_blocker():
@@ -300,7 +345,9 @@ class Session:
         containers = self._d.find_elements(By.CSS_SELECTOR, SEL_QUESTION)
         if not containers:
             return None
-        el = containers[-1]  # older questions stay in the DOM; the newest is last
+        return self._question_from(containers[-1])  # older questions stay in the DOM; the newest is last
+
+    def _question_from(self, el: WebElement) -> Question | None:
         classes = el.get_attribute("class") or ""
         links = el.find_elements(By.CSS_SELECTOR, SEL_CHOICES)
         # Choices the site has already marked wrong (they stop accepting clicks), e.g. from
@@ -597,6 +644,179 @@ class Session:
 
     # ---- interstitials -------------------------------------------------
 
+    # ---- Vocab Jam -----------------------------------------------------
+    # A live game run by a host: every player gets the same question at once and one try at it.
+    # Points shrink as the timer runs and a wrong answer costs half, so a question with no saved
+    # or AI answer is skipped rather than guessed. The reveal shows the right choice, which is
+    # saved, so the next Jam on the same words is answered from the cache.
+
+    _JAM_STATE_JS = "return [document.body.className, document.body.dataset.code || '']"
+
+    def _jam_tick(self) -> None:
+        classes, code = self._d.execute_script(self._JAM_STATE_JS)
+        body = set(classes.split())
+        label = f"{code[:3]}-{code[3:]}"
+        if code != self._jam_code:  # a new Jam, or a rematch: question numbers start again
+            self._jam_code, self._jam_turn, self._jam_picks = code, None, {}
+            self._jam_joined = False
+
+        teams = [b for b in self._d.find_elements(By.CSS_SELECTOR, SEL_JAM_TEAMS) if b.is_displayed()]
+        if teams:
+            team = random.choice(teams)
+            self.log.info("Joining %s", team.text.strip())
+            team.click()
+            self._sleep(1)
+            return
+        if self._exists(SEL_JAM_LOGIN):
+            self._set_if_changed("waiting", "Sign in to Vocabulary.com in this window to play the Jam")
+            self._sleep(1)
+            return
+        member = "member" in body
+        if member and not self._jam_joined:
+            self._jam_joined = True
+            self.log.info("Joined Vocab Jam %s", label)
+
+        self._jam_learn()
+        if "state_complete" in body:
+            if self.status.state != "done":
+                if self._jam_joined:
+                    self.status.assignments_done += 1
+                self.log.info("Jam finished")
+                self._set("done", "Jam finished. Choose what to do next")
+                self._assignments_dirty = True
+            self._refresh_assignments()  # stays on the results; a rematch carries on by itself
+            self._sleep(1)
+            return
+        if member and "state_inprogress" in body and "answer_locked" not in body and self._jam_answer():
+            return
+
+        current = self._jam_picks.get(self._jam_turn or "")
+        # Before the game, or when not playing, the account counts as waiting: it can still be sent elsewhere.
+        state = "jam"
+        if "connected" not in body:
+            state, detail = "waiting", f"Connecting to Vocab Jam {label}"
+        elif not member:
+            state, detail = "waiting", f"Watching Vocab Jam {label}; not a player in it"
+        elif "state_setup" in body:
+            state, detail = "waiting", f"In Vocab Jam {label}, waiting for the host to start"
+        elif "state_countdown" in body:
+            detail = "Get ready, the next question is coming"
+        elif "answer_locked" in body:
+            detail = "Answer locked in, waiting for the others"
+        elif "state_inprogress" in body and current is not None and current.index is None:
+            detail = "Skipped this one, waiting for the next question"
+        elif "state_inprogress" in body:
+            detail = "Waiting for the question"
+        else:
+            detail = "Revealing the answers"
+        self._set_if_changed(state, detail)
+        self._sleep(0.5)
+
+    def _jam_answer(self) -> bool:
+        """Answer the open question once. False if there's no question taking answers."""
+        turns = self._d.find_elements(By.CSS_SELECTOR, SEL_JAM_TURN)
+        if not turns:
+            return False
+        turn = turns[-1]
+        number = turn.get_attribute("data-turn") or ""
+        open_question = turn.find_elements(By.CSS_SELECTOR, SEL_JAM_OPEN)
+        if number in self._jam_picks or not open_question:
+            return False
+        q = self._question_from(open_question[0])
+        if q is None:
+            return False  # still rendering
+        if number != self._jam_turn:
+            self._jam_turn = number
+            self._schedule_next(time.monotonic())  # pace from when the question appeared
+
+        pictures = q.kind == "image"
+        choices = [self._picture(link) for link in q.links] if pictures else q.choices
+        # Recorded once answered or given up on; a failed click leaves it unrecorded so the next tick retries.
+        skipped = JamPick(q.text, choices, None, pictures=pictures)
+        if q.kind == "spelling" or not all(choices):
+            self.log.info("Can't answer this kind of Jam question; skipping it")
+            self._jam_picks[number] = skipped
+            return True
+        self._set("answering", "Image question" if pictures else q.text.replace("\n", "  "))
+
+        index = self.store.lookup(q.text, choices)
+        from_cache = index is not None
+        if index is None:
+            self._count("cache_misses")
+            if pictures:
+                self.log.info("No saved answer for this picture question; skipping it (a wrong answer costs points)")
+                self._jam_picks[number] = skipped
+                return True
+            index = self._ask_ai(q, set())
+            if index is None:
+                self.log.info("No usable AI answer; skipping this question")
+                self._jam_picks[number] = skipped
+                return True
+
+        self._wait_for_turn()
+        if self.stop.is_set():
+            return True
+        if not turn.find_elements(By.CSS_SELECTOR, SEL_JAM_OPEN):
+            self.log.info("Time ran out before answering")
+            self._jam_picks[number] = skipped
+            return True
+        try:
+            q.links[index].click()
+        except WebDriverException as e:
+            self.log.info("Could not click choice %d: %s", index + 1, (e.msg or str(e)).splitlines()[0])
+            return False
+        self._jam_picks[number] = JamPick(q.text, choices, index, pictures, from_cache)
+        self._answered()
+        self.log.info("Locked in %r", skipped.label(index))
+        return True
+
+    def _jam_learn(self) -> None:
+        """Save each revealed right answer, and score what this session picked."""
+        for number, pick in list(self._jam_picks.items()):
+            section = self._d.find_elements(By.CSS_SELECTOR, f'section.turn[data-turn="{number}"]')
+            if not section or not section[0].find_elements(By.CSS_SELECTOR, SEL_JAM_CORRECT):
+                continue  # not revealed yet
+            links = section[0].find_elements(By.CSS_SELECTOR, SEL_CHOICES)
+            right = next(i for i, link in enumerate(links)
+                         if {"revealed", "correct"} <= set((link.get_attribute("class") or "").split()))
+            del self._jam_picks[number]
+            if len(links) != len(pick.choices) or not all(pick.choices):
+                continue
+            self.store.remember(pick.text, pick.choices, right)
+            if pick.index is None:
+                self.log.info("Saved the revealed answer: %s", pick.label(right))
+                continue
+            result = RIGHT if pick.index == right else WRONG
+            self.log.info("Picked %r: %s", pick.label(pick.index), result)
+            if result == RIGHT:
+                self._count("correct_answers")
+                if pick.from_cache:
+                    self._count("cache_hits")
+            else:
+                self._count("wrong_answers")
+
+    @staticmethod
+    def _picture(link: WebElement) -> str:
+        """A picture choice's image address, without the size the Jam page adds to it."""
+        css = link.value_of_css_property("background-image") or ""
+        return css.split("?")[0].removeprefix('url("').removesuffix('")') if css.startswith("url(") else ""
+
+    def _jam_not_found(self, code: str) -> bool:
+        """A requested Jam that isn't on screen. The site shows its code-entry page for a code
+        it doesn't know. Returns True while still waiting for the page."""
+        not_found = self._exists(SEL_JAM_JOIN)
+        if not not_found and time.monotonic() - self._opened_at < JAM_OPEN_TIMEOUT:
+            self._sleep(0.5)
+            return True
+        self._jam_requested = None
+        label = f"{code[:3]}-{code[3:]}"
+        self._notice = (f"No Vocab Jam has the code {label}. Check it with the host." if not_found
+                        else f"Vocab Jam {label} didn't open. Try again.")
+        self.log.warning(self._notice)
+        self._set("choosing", self._notice)
+        self._d.get(self.start_url)
+        return True
+
     # ---- choosing an assignment ----------------------------------------
 
     def request_assignment(self, assignment_id: str) -> str | None:
@@ -610,7 +830,7 @@ class Session:
         if not match["supported"]:
             return f"{match['kind_label']} assignments aren't supported yet; only Practice."
         with self._request_lock:
-            self._open_request = (match["url"], match["name"])
+            self._open_request = (match["url"], match["name"], None)
         return None
 
     def request_vocabtrainer(self) -> str | None:
@@ -618,7 +838,18 @@ class Session:
         if self.status.state not in IDLE_STATES:
             return f"{self.status.account or self.name} is busy; stop it or wait until it finishes."
         with self._request_lock:
-            self._open_request = (VOCABTRAINER_URL, "VocabTrainer")
+            self._open_request = (VOCABTRAINER_URL, "VocabTrainer", None)
+        return None
+
+    def request_jam(self, code: str) -> str | None:
+        """Ask this session to join a Vocab Jam with the host's code. Returns an error message or None."""
+        digits = jam_code(code)
+        if digits is None:
+            return "Enter the 6-digit Jam code from the host, like 123-456."
+        if self.status.state not in IDLE_STATES:
+            return f"{self.status.account or self.name} is busy; stop it or wait until it finishes."
+        with self._request_lock:
+            self._open_request = (JAM_URL.format(code=digits), f"Vocab Jam {digits[:3]}-{digits[3:]}", digits)
         return None
 
     def _open_requested(self) -> bool:
@@ -626,7 +857,8 @@ class Session:
             request, self._open_request = self._open_request, None
         if request is None:
             return False
-        url, name = request
+        url, name, self._jam_requested = request
+        self._notice = ""
         self.log.info("Opening assignment %s", name)
         self._set("opening", f"Opening {name}")
         self._finished_seen = False
@@ -667,6 +899,8 @@ class Session:
             self._set_if_changed("waiting", "Sign in to Vocabulary.com in this window")
         elif not self.status.assignments_loaded:
             self._set_if_changed("waiting", "Loading assignments")
+        elif self._notice:
+            self._set_if_changed("choosing", self._notice)
         elif todo:
             self._set_if_changed("choosing", "Choose an assignment")
         else:

@@ -144,7 +144,7 @@ button, input { font: inherit; color: inherit; }
   font-size: 12px; font-weight: 600; padding: 2px 9px; border-radius: 999px;
   border: 1px solid currentColor; color: var(--muted); white-space: nowrap;
 }
-.state.answering, .state.opening { color: var(--right); }
+.state.answering, .state.opening, .state.jam { color: var(--right); }
 .state.choosing { color: var(--ink); }
 .state.waiting, .state.blocked, .state.paused { color: var(--wait); }
 .state.done { color: var(--on-highlight); background: var(--highlight); border-color: var(--highlight); }
@@ -179,6 +179,8 @@ button, input { font: inherit; color: inherit; }
 .alist .btn { grid-row: 1 / span 2; grid-column: 2; }
 .tag { font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 4px; margin-left: 6px; background: var(--mark); color: var(--ink); vertical-align: 1px; }
 .panel .alist { margin-top: 10px; max-height: 250px; overflow-y: auto; }
+.alist .jam-join { grid-row: 1 / span 2; grid-column: 2; display: flex; gap: 6px; }
+.jam-join input { width: 88px; padding: 5px 9px; border-radius: 8px; border: 1px solid var(--rule); background: var(--surface); font-variant-numeric: tabular-nums; }
 .panel .msg.small { font-family: var(--sans); font-size: 14px; color: var(--muted); margin: 14px 0 0; }
 
 /* ---- activity ---- */
@@ -402,6 +404,8 @@ function useMock() {
     open_shared: () => { accounts.forEach(a => opened[a.name] = true); return ok(null); },
     open_vocabtrainer: (name) => { opened[name] = true; return ok(null); },
     open_vocabtrainer_all: () => { accounts.forEach(a => opened[a.name] = true); return ok(null); },
+    open_jam: (name, code) => { if (!/^\d{3}-?\d{3}$/.test(code.trim())) return ok("Enter the 6-digit Jam code from the host, like 123-456."); opened[name] = true; return ok(null); },
+    open_jam_all: (code) => { if (!/^\d{3}-?\d{3}$/.test(code.trim())) return ok("Enter the 6-digit Jam code from the host, like 123-456."); accounts.forEach(a => opened[a.name] = true); return ok(null); },
     set_api_key: (k) => { if (!k.startsWith("sk-")) return ok("OpenAI rejected that key. Check it at platform.openai.com/api-keys."); hasKey = true; return ok(null); },
     save_settings: () => ok(null), open_folder: () => ok(null), open_url: (u) => { window.open(u); return ok(null); },
   };
@@ -446,7 +450,7 @@ function ask(title, text, yes) {
     d.addEventListener("close", () => resolve(d.returnValue === "yes"), { once: true });
   });
 }
-const STATE_LABEL = { answering: "Answering", waiting: "Waiting", choosing: "Pick an assignment", opening: "Opening", paused: "Taking a break", done: "Done", blocked: "Paused", reloading: "Reloading",
+const STATE_LABEL = { answering: "Answering", waiting: "Waiting", choosing: "Pick an assignment", opening: "Opening", jam: "In a Jam", paused: "Taking a break", done: "Done", blocked: "Paused", reloading: "Reloading",
   launching: "Opening Chrome", starting: "Opening Chrome", error: "Error", closed: "Window closed", stopped: "Stopped" };
 const WAITING_TEXT = {
   "Sign in to Vocabulary.com in this window": "Sign in to Vocabulary.com in its Chrome window. Its assignments show up here after that.",
@@ -599,13 +603,14 @@ function renderPanel(s) {
     const key = JSON.stringify([text, idle, list.map(a => [a.id, a.pct, sharedIds.has(a.id)])]);
     if (p.dataset.body !== key) {
       p.dataset.body = key;
-      const nodes = [el("div", idle ? "msg small" : "msg", idle && list.length && s.state !== "done" ? "Choose an assignment to start." : text)];
+      const nodes = [el("div", idle ? "msg small" : "msg", text)];
       if (idle) {
         const ordered = [...list].sort((a, b) => sharedIds.has(b.id) - sharedIds.has(a.id));
         const ul = el("ul", "alist");
         for (const a of ordered)
           ul.append(assignmentItem(a, "Start", () => api.open_assignment(s.name, a.id), sharedIds.has(a.id) ? "All accounts" : ""));
         ul.append(vocabTrainerItem("Start", () => api.open_vocabtrainer(s.name)));
+        ul.append(jamItem("Join", (code) => api.open_jam(s.name, code)));
         nodes.push(ul);
       }
       body.replaceChildren(...nodes);
@@ -636,12 +641,32 @@ function renderShared(shared, idle) {
   const ul = $("shared-list"); ul.replaceChildren();
   for (const a of shared) ul.append(assignmentItem(a, `Start on all ${idle}`, () => api.open_shared(a.id)));
   ul.append(vocabTrainerItem(`Start on all ${idle}`, () => api.open_vocabtrainer_all()));
+  ul.append(jamItem(`Join on all ${idle}`, (code) => api.open_jam_all(code)));
 }
 
 function vocabTrainerItem(label, onStart) {
   const li = assignmentItem(VOCABTRAINER, label, onStart);
   li.querySelector(".a-meta").textContent = VT_META;
   li.querySelector(".btn").className = "btn";  // secondary: assignments come first
+  return li;
+}
+
+function jamItem(label, onJoin) {
+  const li = el("li");
+  const form = el("form", "jam-join");
+  const input = el("input");
+  input.placeholder = "123-456"; input.inputMode = "numeric"; input.maxLength = 7; input.autocomplete = "off";
+  input.setAttribute("aria-label", "Jam code");
+  const btn = el("button", "btn", label);
+  form.append(input, btn);
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    btn.disabled = true;
+    const err = await act(onJoin(input.value));
+    btn.disabled = false;
+    if (!err) input.value = "";
+  };
+  li.append(el("div", "a-name", "Vocab Jam"), form, el("div", "a-meta", "Live game, join with the host's code"));
   return li;
 }
 
@@ -656,7 +681,7 @@ function renderFeed(events) {
   for (const e of events) {
     const m = e.text.match(/^Picked (['"])(.*)\1: (right|wrong|no response)$/);  // Python repr quoting
     if (m) feedItems.unshift({ ...e, what: m[2], result: m[3] });
-    else if (/^(Assignment complete|Signed in as|Achievement unlocked|Cached answer was wrong)/.test(e.text)) feedItems.unshift({ ...e, what: e.text, result: "note" });
+    else if (/^(Assignment complete|Signed in as|Achievement unlocked|Cached answer was wrong|Joined Vocab Jam|Jam finished|No Vocab Jam|Vocab Jam .* didn't open)/.test(e.text)) feedItems.unshift({ ...e, what: e.text, result: "note" });
   }
   feedItems = feedItems.slice(0, 80);
   const ul = $("feed"); ul.replaceChildren();

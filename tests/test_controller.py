@@ -178,3 +178,23 @@ def test_vocabtrainer_all_targets_idle_accounts(ctl, monkeypatch):
     assert ctl.snapshot()["idle_accounts"] == 1
     assert ctl.open_vocabtrainer_all() is None
     assert started == ["alice"]
+
+
+def test_jam_all_checks_the_code_then_targets_idle_accounts(ctl, monkeypatch):
+    joined = []
+    monkeypatch.setattr(FakeSession, "request_jam", lambda self, code: joined.append((self.name, code)) or None, raising=False)
+    ctl.start("alice")
+    ctl.start("bob")
+    _give(ctl, "alice", [])
+    _give(ctl, "bob", [_a("u8")], state="answering")
+    assert "6-digit" in ctl.open_jam_all("12-34")
+    assert joined == []
+    assert ctl.open_jam_all("123-456") is None
+    assert joined == [("alice", "123-456")]
+
+
+def test_jam_code():
+    from vocabbot.session import jam_code
+    assert jam_code("123-456") == jam_code(" 123456 ") == jam_code("123 456") == "123456"
+    assert jam_code("12345") is None and jam_code("1234567") is None and jam_code("12a-456") is None
+    assert jam_code("١٢٣٤٥٦") is None   # only ASCII digits

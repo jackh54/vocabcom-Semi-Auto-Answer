@@ -64,4 +64,4 @@ def test_session_request_rules(tmp_path):
     s.status.state = "choosing"
     assert "isn't in this account's list" in s.request_assignment("gone")
     assert "Spelling Bee" in s.request_assignment("bee")
-    assert s.request_assignment("u8") is None and s._open_request == ("https://x/u8", "Unit 8")
+    assert s.request_assignment("u8") is None and s._open_request == ("https://x/u8", "Unit 8", None)

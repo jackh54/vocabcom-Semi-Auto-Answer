@@ -74,6 +74,12 @@ class Api:
     def open_vocabtrainer_all(self):
         return self._ctl.open_vocabtrainer_all()
 
+    def open_jam(self, name, code):
+        return self._ctl.open_jam(str(name), str(code or ""))
+
+    def open_jam_all(self, code):
+        return self._ctl.open_jam_all(str(code or ""))
+
     def new_account_name(self):
         return self._ctl.next_account_name()
 

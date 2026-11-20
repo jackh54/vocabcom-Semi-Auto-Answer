@@ -22,7 +22,7 @@ from .accounts import list_accounts, valid_name
 from .assignments import shared_ids
 from .answerer import Answerer
 from .config import Config, ConfigError, MissingKeyError, load_config, write_initial_config
-from .session import IDLE_STATES, Session
+from .session import IDLE_STATES, Session, jam_code
 from .store import Store
 
 log = logging.getLogger(__name__)
@@ -278,6 +278,23 @@ class Controller:
         if not choosers:
             return "No account is waiting for something to do."
         errors = [e for e in (r.session.request_vocabtrainer() for r in choosers) if e]
+        return " ".join(errors) or None
+
+    def open_jam(self, name: str, code: str) -> str | None:
+        with self._lock:
+            r = self._running.get(name)
+        if r is None or not r.thread.is_alive():
+            return f"{name} isn't running."
+        return r.session.request_jam(code)
+
+    def open_jam_all(self, code: str) -> str | None:
+        """Join one Vocab Jam on every idle, signed-in account."""
+        if jam_code(code) is None:
+            return "Enter the 6-digit Jam code from the host, like 123-456."
+        choosers = self._choosers()
+        if not choosers:
+            return "No account is waiting for something to do."
+        errors = [e for e in (r.session.request_jam(code) for r in choosers) if e]
         return " ".join(errors) or None
 
     def dismiss(self, name: str) -> None:

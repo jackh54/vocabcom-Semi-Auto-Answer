@@ -11,6 +11,7 @@ Answers Vocabulary.com assignment questions in Chrome using an answer cache firs
 - **Saved accounts**: sign in to Vocabulary.com once per account; the app shows who's signed in to each
 - **Assignment picker**: lists each account's unfinished assignments; one that every account has comes first, with a button to start it on all of them
 - **VocabTrainer**: start [VocabTrainer](https://www.vocabulary.com/vocabtrainer/) on one account or all of them; it keeps going until you stop it
+- **Vocab Jam**: join a live [Vocabulary Jam](https://www.vocabulary.com/jam/) with the host's code on one account or all of them; it answers each question once and learns the revealed answers
 - **Shared answer cache** (SQLite): an answer learned in one session is reused by all of them, and by later runs
 - Handles multiple-choice, sentence-context, image and spelling questions, countdown blockers, achievements and round screens
 - Answers 3–5 seconds apart (adjustable), moves on after wrong picks, reloads the page if a question gets stuck
@@ -43,7 +44,9 @@ You also need Google Chrome. On Windows the app uses Microsoft Edge WebView2, wh
 
 Every waiting account also has a **VocabTrainer** row, and with two or more accounts waiting the top strip offers **Start on all** for it too. VocabTrainer has no end, so it runs until you click **Stop**. If VocabTrainer decides you're going too fast it shows a 5-minute "Woah, that's fast!" break; the session shows **Taking a break** with the countdown and carries on when it ends.
 
-Only Practice assignments and VocabTrainer are answered automatically; Spelling Bee and Quiz assignments are listed but marked "Not supported". You can still open anything yourself in an account's Chrome window and it answers practice questions it finds.
+Every waiting account also has a **Vocab Jam** row: type the 6-digit code the host shows (like `123-456`) and click **Join**, or **Join on all** in the top strip. If the host lets players pick a team, it picks one at random. A Jam gives one try per question, points drop as the timer runs and a wrong answer costs half, so it answers from saved answers or the AI after the usual 3–5 second gap, and skips a question it has nothing for (a picture question it hasn't seen before) instead of guessing. When the answer is revealed it's saved, so the next Jam on the same list does better. The account stays on the results when the Jam ends, so a host's **Rematch** carries on by itself.
+
+Only Practice assignments, VocabTrainer and Vocab Jam are answered automatically; Spelling Bee and Quiz assignments are listed but marked "Not supported". You can still open anything yourself in an account's Chrome window and it answers practice questions it finds.
 
 **Settings** has the OpenAI model, the gap between answers, your API key, and buttons to open the data and log folders. The app keeps everything in your user folder, so updating is just replacing the app:
 - Mac: `~/Library/Application Support/vocabbot`
@@ -70,7 +73,7 @@ Put your key in `config.json` (or leave it blank and set `OPENAI_API_KEY`). `con
 
 ```bash
 python main.py --gui             # the desktop app
-python main.py                   # terminal version: choose accounts, then assignments (shared first) or VocabTrainer (v)
+python main.py                   # terminal version: choose accounts, then assignments (shared first), VocabTrainer (v) or Vocab Jam (j)
 python main.py -a alice -a bob   # run these accounts without the list
 python main.py -n 3              # three sessions named session-1..3
 ```
